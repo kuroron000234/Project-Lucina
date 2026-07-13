@@ -1,0 +1,212 @@
+{
+  "state": {
+    "energy": 65.82000000000001,
+    "hunger": 19.52,
+    "loneliness": 20.270000000000003,
+    "spirit": 72.0
+  },
+  "time": "2026-07-13T08:30:00",
+  "current_activity": "talk_to_user",
+  "activity_remaining": 10,
+  "activity_total_duration": 10,
+  "history": [
+    {
+      "time": "07:00",
+      "activity": "talk_to_user",
+      "state_before": {
+        "energy": 75,
+        "hunger": 20,
+        "loneliness": 25,
+        "spirit": 65
+      },
+      "state_after": {
+        "energy": 75.0,
+        "hunger": 20.0,
+        "loneliness": 25.0,
+        "spirit": 65.0
+      }
+    },
+    {
+      "time": "07:15",
+      "activity": "walk",
+      "state_before": {
+        "energy": 73.5,
+        "hunger": 20.5,
+        "loneliness": 23.0,
+        "spirit": 65.8
+      },
+      "state_after": {
+        "energy": 73.5,
+        "hunger": 20.5,
+        "loneliness": 23.0,
+        "spirit": 65.8
+      }
+    },
+    {
+      "time": "07:45",
+      "activity": "piano",
+      "state_before": {
+        "energy": 69.8,
+        "hunger": 21.8,
+        "loneliness": 20.7,
+        "spirit": 67.8
+      },
+      "state_after": {
+        "energy": 69.8,
+        "hunger": 21.8,
+        "loneliness": 20.7,
+        "spirit": 67.8
+      }
+    },
+    {
+      "time": "08:15",
+      "activity": "jasmine_tea",
+      "state_before": {
+        "energy": 65.4,
+        "hunger": 22.9,
+        "loneliness": 20.2,
+        "spirit": 71.9
+      },
+      "state_after": {
+        "energy": 65.4,
+        "hunger": 22.9,
+        "loneliness": 20.2,
+        "spirit": 71.9
+      }
+    },
+    {
+      "time": "08:30",
+      "activity": "talk_to_user",
+      "state_before": {
+        "energy": 65.8,
+        "hunger": 19.5,
+        "loneliness": 20.3,
+        "spirit": 72.0
+      },
+      "state_after": {
+        "energy": 65.8,
+        "hunger": 19.5,
+        "loneliness": 20.3,
+        "spirit": 72.0
+      }
+    }
+  ],
+  "model_deltas": {
+    "sleep": {
+      "energy": 30,
+      "hunger": 5,
+      "loneliness": 2,
+      "spirit": -3
+    },
+    "deep_sleep": {
+      "energy": 40,
+      "hunger": 5,
+      "loneliness": 1,
+      "spirit": 0
+    },
+    "eat": {
+      "energy": 5,
+      "hunger": -40,
+      "loneliness": 0,
+      "spirit": 2
+    },
+    "piano": {
+      "energy": -7.07,
+      "hunger": 1.46,
+      "loneliness": -2,
+      "spirit": 11.16
+    },
+    "piano_long": {
+      "energy": -15,
+      "hunger": 3,
+      "loneliness": -3,
+      "spirit": 20
+    },
+    "read": {
+      "energy": -5,
+      "hunger": 1,
+      "loneliness": -1,
+      "spirit": 8
+    },
+    "idle": {
+      "energy": -3,
+      "hunger": 1,
+      "loneliness": 5,
+      "spirit": -3
+    },
+    "rest": {
+      "energy": 10,
+      "hunger": 0,
+      "loneliness": 4,
+      "spirit": -2
+    },
+    "stretch": {
+      "energy": 5,
+      "hunger": 0,
+      "loneliness": 0,
+      "spirit": 3
+    },
+    "write_diary": {
+      "energy": -3,
+      "hunger": 0,
+      "loneliness": -5,
+      "spirit": 5
+    },
+    "walk": {
+      "energy": -4.49,
+      "hunger": 2.28,
+      "loneliness": -5,
+      "spirit": 8.53
+    },
+    "talk": {
+      "energy": -2,
+      "hunger": 0,
+      "loneliness": -15,
+      "spirit": 5
+    },
+    "talk_to_user": {
+      "energy": -2.74,
+      "hunger": 0,
+      "loneliness": -12.36,
+      "spirit": 5.42
+    },
+    "jasmine_tea": {
+      "energy": 1.74,
+      "hunger": -4.66,
+      "loneliness": 0.0,
+      "spirit": 0.4
+    }
+  },
+  "model_counts": {
+    "sleep": 0,
+    "deep_sleep": 0,
+    "eat": 0,
+    "piano": 1,
+    "piano_long": 0,
+    "read": 0,
+    "idle": 0,
+    "rest": 0,
+    "stretch": 0,
+    "write_diary": 0,
+    "walk": 1,
+    "talk": 0,
+    "talk_to_user": 1,
+    "jasmine_tea": 1
+  },
+  "last_done": {
+    "sleep": null,
+    "deep_sleep": null,
+    "eat": null,
+    "piano": "2026-07-13T08:15:00",
+    "piano_long": null,
+    "read": null,
+    "idle": null,
+    "rest": null,
+    "stretch": null,
+    "write_diary": null,
+    "walk": "2026-07-13T07:45:00",
+    "talk": null,
+    "talk_to_user": "2026-07-13T07:15:00",
+    "jasmine_tea": "2026-07-13T08:30:00"
+  }
+}

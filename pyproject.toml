@@ -1,0 +1,13 @@
+[project]
+name = "monica-core"
+version = "0.2.0"
+description = "Monica: タグベース世界層で自律生活するAIエージェント"
+requires-python = ">=3.11"
+dependencies = []
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/monica_core"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
