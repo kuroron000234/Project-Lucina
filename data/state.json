@@ -1,10 +1,10 @@
 {
   "state": {
-    "energy": 50.510000000000005,
-    "hunger": 23.615000000000002,
-    "fatigue": 6.36,
-    "loneliness": 39.645,
-    "spirit": 56.449999999999996
+    "energy": 59.08,
+    "hunger": 13.64500000000001,
+    "fatigue": 4.3999999999999995,
+    "loneliness": 40.47500000000001,
+    "spirit": 53.10999999999999
   },
   "time": "2026-07-14T08:45:00",
   "current_activity": "talk_to_user",
@@ -13,56 +13,74 @@
   "history": [
     {
       "time": "07:00",
-      "activity": "eat",
+      "activity": "idle",
       "state_before": {
-        "energy": 55,
-        "hunger": 45,
+        "energy": 60,
+        "hunger": 35,
         "fatigue": 5,
         "loneliness": 40,
         "spirit": 50
       },
       "state_after": {
-        "energy": 55.0,
-        "hunger": 45.0,
+        "energy": 60.0,
+        "hunger": 35.0,
         "fatigue": 5.0,
         "loneliness": 40.0,
         "spirit": 50.0
       }
     },
     {
-      "time": "07:45",
+      "time": "07:30",
       "activity": "piano",
       "state_before": {
-        "energy": 57.7,
-        "hunger": 21.0,
-        "fatigue": 3.3,
-        "loneliness": 40.4,
-        "spirit": 50.5
+        "energy": 59.3,
+        "hunger": 36.2,
+        "fatigue": 4.1,
+        "loneliness": 40.7,
+        "spirit": 48.6
       },
       "state_after": {
-        "energy": 57.7,
-        "hunger": 21.0,
-        "fatigue": 3.3,
-        "loneliness": 40.4,
-        "spirit": 50.5
+        "energy": 59.3,
+        "hunger": 36.2,
+        "fatigue": 4.1,
+        "loneliness": 40.7,
+        "spirit": 48.6
+      }
+    },
+    {
+      "time": "08:00",
+      "activity": "eat",
+      "state_before": {
+        "energy": 55.6,
+        "hunger": 37.6,
+        "fatigue": 6.1,
+        "loneliness": 40.1,
+        "spirit": 52.6
+      },
+      "state_after": {
+        "energy": 55.6,
+        "hunger": 37.6,
+        "fatigue": 6.1,
+        "loneliness": 40.1,
+        "spirit": 52.6
       }
     },
     {
       "time": "08:45",
       "activity": "talk_to_user",
       "state_before": {
-        "energy": 50.5,
-        "hunger": 23.6,
-        "fatigue": 6.4,
-        "loneliness": 39.6,
-        "spirit": 56.4
+        "energy": 59.1,
+        "hunger": 13.6,
+        "fatigue": 4.4,
+        "loneliness": 40.5,
+        "spirit": 53.1
       },
       "state_after": {
-        "energy": 50.5,
-        "hunger": 23.6,
-        "fatigue": 6.4,
-        "loneliness": 39.6,
-        "spirit": 56.4
+        "energy": 59.1,
+        "hunger": 13.6,
+        "fatigue": 4.4,
+        "loneliness": 40.5,
+        "spirit": 53.1
       }
     }
   ],
@@ -90,11 +108,11 @@
       "spirit": 2
     },
     "piano": {
-      "energy": -6.87,
-      "hunger": 1.72,
-      "fatigue": 5.13,
-      "loneliness": -1.77,
-      "spirit": 10.48
+      "energy": -7.25,
+      "hunger": 1.82,
+      "fatigue": 5.41,
+      "loneliness": -2,
+      "spirit": 11.12
     },
     "piano_long": {
       "energy": -15,
@@ -111,11 +129,11 @@
       "spirit": 8
     },
     "idle": {
-      "energy": -3,
+      "energy": -1.89,
       "hunger": 1,
-      "fatigue": 1,
-      "loneliness": 5,
-      "spirit": -3
+      "fatigue": 0.17,
+      "loneliness": 3.74,
+      "spirit": -2.66
     },
     "rest": {
       "energy": 10,
@@ -167,7 +185,7 @@
     "piano": 1,
     "piano_long": 0,
     "read": 0,
-    "idle": 0,
+    "idle": 1,
     "rest": 0,
     "stretch": 0,
     "write_diary": 0,
@@ -178,11 +196,11 @@
   "last_done": {
     "sleep": null,
     "deep_sleep": null,
-    "eat": "2026-07-14T07:45:00",
-    "piano": "2026-07-14T08:45:00",
+    "eat": "2026-07-14T08:45:00",
+    "piano": "2026-07-14T08:00:00",
     "piano_long": null,
     "read": null,
-    "idle": null,
+    "idle": "2026-07-14T07:30:00",
     "rest": null,
     "stretch": null,
     "write_diary": null,

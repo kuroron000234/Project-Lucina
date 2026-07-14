@@ -71,20 +71,21 @@ TAG_EFFECTS = {
     "outdoor":   {"energy":  -2, "hunger": +1, "fatigue": +3,  "loneliness": -6, "spirit": +4},
     "play":      {"energy":  -5, "hunger": +1, "fatigue": +5,  "loneliness": -2, "spirit":+10},
     "rest":      {"energy":  +6, "hunger":  0, "fatigue": -7,  "loneliness":  0, "spirit": -1},
+    "sleep":     {"energy":  +8, "hunger": +2, "fatigue":-10,  "loneliness":  0, "spirit": -1},
     "nourish":   {"energy":  +7, "hunger":-38, "fatigue": -2,  "loneliness":  0, "spirit": +2},
     "boredom":   {"energy":  -1, "hunger": +1, "fatigue":  0,  "loneliness": +1, "spirit": -2},
 }
 
 ACTIVITY_TAGS = {
-    "sleep":        {"rest": 0.9, "boredom": 0.3},
-    "deep_sleep":   {"rest": 1.0, "boredom": 0.4},
+    "sleep":        {"sleep": 0.8, "rest": 0.3},
+    "deep_sleep":   {"sleep": 1.0, "rest": 0.2},
     "eat":          {"nourish": 1.0, "rest": 0.1},
     "piano":        {"play": 0.8, "mental": 0.3, "exertion": 0.1},
     "piano_long":   {"play": 0.9, "mental": 0.4, "exertion": 0.2},
     "read":         {"mental": 0.7, "play": 0.2, "boredom": 0.3},
     "idle":         {"boredom": 0.8, "rest": 0.1},
     "rest":         {"rest": 0.7, "boredom": 0.3},
-    "stretch":      {"exertion": 0.4, "rest": 0.3},
+    "stretch":      {"rest": 0.6, "exertion": 0.1},
     "write_diary":  {"mental": 0.5, "play": 0.4},
     "walk":         {"exertion": 0.3, "outdoor": 0.8, "play": 0.1},
     "talk":         {"social": 0.9, "mental": 0.2},
@@ -158,7 +159,7 @@ SETPOINTS = {
 }
 
 DRIFT_RATES = {
-    VitalParam.ENERGY: -3,      # 基礎代謝（重力下で生存するだけで消費）
+    VitalParam.ENERGY: -2,      # 基礎代謝（重力下で生存するだけで消費）
     VitalParam.HUNGER: 1.5,     # 血糖値の自然減少
     VitalParam.FATIGUE: 0,      # 疲労は自然には減らない（休息が必要）
     VitalParam.LONELINESS: 0.5,
@@ -168,8 +169,8 @@ DRIFT_RATES = {
 
 @dataclass
 class VitalState:
-    energy: float = 55
-    hunger: float = 45
+    energy: float = 60
+    hunger: float = 35
     fatigue: float = 5
     loneliness: float = 40
     spirit: float = 50
