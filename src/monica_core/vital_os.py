@@ -22,6 +22,43 @@ PARAM_TO_KWARG = {
     "loneliness": "loneliness_delta", "spirit": "spirit_delta",
 }
 
+# ── 部屋・環境 ──
+LOCATIONS = {
+    "bedroom": {
+        "name_ja": "自室",
+        "desc": "温かみのある落ち着いた自室。ベッド、本棚、ピアノがある。",
+        "adjacent": ["living_room", "hallway"],
+        "activities": ["sleep", "deep_sleep", "piano", "piano_long", "read", "write_diary", "idle", "rest", "stretch"],
+        "tags_bonus": {"rest": 0.15},
+    },
+    "living_room": {
+        "name_ja": "リビング",
+        "desc": "広々としたリビング。ソファと窓から日差しが入る。",
+        "adjacent": ["bedroom", "kitchen", "hallway"],
+        "activities": ["rest", "idle", "read", "talk", "talk_to_user", "stretch"],
+        "tags_bonus": {"social": 0.2, "rest": 0.1},
+    },
+    "kitchen": {
+        "name_ja": "キッチン",
+        "desc": "明るいキッチン。冷蔵庫とコンロがある。",
+        "adjacent": ["living_room", "hallway"],
+        "activities": ["eat"],
+        "tags_bonus": {"nourish": 0.1},
+    },
+    "hallway": {"name_ja": "廊下", "desc": "各部屋をつなぐ廊下。", "adjacent": ["bedroom", "living_room", "kitchen", "bathroom", "entrance"], "activities": [], "tags_bonus": {}},
+    "bathroom": {"name_ja": "バスルーム", "desc": "清潔なバスルーム。シャワーと洗面台がある。", "adjacent": ["hallway"], "activities": [], "tags_bonus": {}},
+    "entrance": {"name_ja": "玄関", "desc": "家の入り口。靴と傘立てがある。", "adjacent": ["hallway", "garden"], "activities": [], "tags_bonus": {}},
+    "garden": {
+        "name_ja": "庭",
+        "desc": "小さな庭。ベンチと花が咲いている。",
+        "adjacent": ["entrance"],
+        "activities": ["walk", "rest", "stretch", "read", "idle"],
+        "tags_bonus": {"outdoor": 0.6, "play": 0.1},
+    },
+}
+
+MOVE_TIME = 3  # 部屋移動にかかる基本時間(分)
+
 # ── 世界層（True Physics）──
 # タグ1単位あたりのE/H/L/Sへの1時間あたり効果
 # 設計指針: 8h睡眠後の起床時Eが~70程度、3食で空腹が持続可能な範囲
@@ -53,9 +90,13 @@ ACTIVITY_TAGS = {
 }
 
 
-def compute_true_effect(activity_name: str, duration_minutes: int) -> dict[str, float]:
-    """世界層: タグ→パラメータ効果 を計算（活動1回ぶんの総効果）"""
-    tags = ACTIVITY_TAGS.get(activity_name, {})
+def compute_true_effect(activity_name: str, duration_minutes: int,
+                        location: str | None = None) -> dict[str, float]:
+    tags = dict(ACTIVITY_TAGS.get(activity_name, {}))
+    if location and location in LOCATIONS:
+        bonus = LOCATIONS[location].get("tags_bonus", {})
+        for tag, v in bonus.items():
+            tags[tag] = tags.get(tag, 0) + v
     per_hour = {p: 0.0 for p in PARAMS}
     for tag, intensity in tags.items():
         tag_row = TAG_EFFECTS.get(tag, {p: 0 for p in PARAMS})
@@ -239,6 +280,7 @@ class VitalOS:
         self.state_before_activity: Optional[dict] = None
         self.activity_start_time: Optional[datetime] = None
         self.activity_total_duration: int = 0
+        self.current_room: str = "bedroom"
 
     DATA_DIR = Path(__file__).resolve().parents[2] / "data"
     
@@ -259,6 +301,7 @@ class VitalOS:
                  "state_before": e.state_before, "state_after": e.state_after}
                 for e in self.history
             ],
+            "current_room": self.current_room,
             "model_deltas": {name: dict(d) for name, d in self.model.deltas.items()},
             "model_counts": dict(self.model.counts),
             "last_done": {
@@ -280,6 +323,7 @@ class VitalOS:
             self.current_activity = data["current_activity"]
             self.activity_remaining = data["activity_remaining"]
             self.activity_total_duration = data["activity_total_duration"]
+            self.current_room = data.get("current_room", "bedroom")
             self.history = [
                 Event(e["time"], e["activity"], e["state_before"], e["state_after"])
                 for e in data["history"]
@@ -317,7 +361,7 @@ class VitalOS:
     def _apply_activity_effects(self, activity_name: str, minutes: int):
         if self.activity_total_duration <= 0:
             return
-        total_effect = compute_true_effect(activity_name, self.activity_total_duration)
+        total_effect = compute_true_effect(activity_name, self.activity_total_duration, self.current_room)
         fraction = minutes / self.activity_total_duration
         for param in PARAMS:
             v = getattr(self.state, param)
@@ -328,6 +372,10 @@ class VitalOS:
         if not act:
             return
         dur = duration or act.duration_minutes
+        target_room = self.find_room_for(activity_name)
+        if target_room and target_room != self.current_room:
+            move_cost = self.move_to(target_room)
+            dur += move_cost
         self.state_before_activity = self.state.as_float_dict()
         self.activity_start_time = self.time
         self.activity_total_duration = dur
@@ -367,6 +415,50 @@ class VitalOS:
         self.activity_remaining = 0
         self.state_before_activity = None
         self.activity_start_time = None
+
+    def _shortest_path(self, start: str, goal: str) -> list[str]:
+        if start == goal:
+            return []
+        seen = {start}
+        queue = [[start]]
+        while queue:
+            path = queue.pop(0)
+            node = path[-1]
+            for nxt in LOCATIONS.get(node, {}).get("adjacent", []):
+                if nxt == goal:
+                    return path[1:] + [nxt]
+                if nxt not in seen:
+                    seen.add(nxt)
+                    queue.append(path + [nxt])
+        return []
+
+    def move_to(self, target: str, log: bool = True) -> int:
+        if target == self.current_room or target not in LOCATIONS:
+            return 0
+        path = self._shortest_path(self.current_room, target)
+        if not path:
+            return 0
+        for room in path:
+            self.current_room = room
+            if log:
+                self.day_log.append(f"[{self.time.strftime('%H:%M')}] {LOCATIONS[room]['name_ja']}に移動した")
+        return len(path) * MOVE_TIME
+
+    def room_activities(self) -> list[str]:
+        loc = LOCATIONS.get(self.current_room, LOCATIONS["bedroom"])
+        return list(loc["activities"])
+
+    def activity_available(self, name: str) -> bool:
+        for loc in LOCATIONS.values():
+            if name in loc["activities"]:
+                return True
+        return True  # unknown activities are allowed
+
+    def find_room_for(self, activity: str) -> str | None:
+        for rid, loc in LOCATIONS.items():
+            if activity in loc["activities"]:
+                return rid
+        return self.current_room
 
     def _critical_needs(self) -> Optional[tuple[str, int]]:
         s = self.state

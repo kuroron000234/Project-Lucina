@@ -16,7 +16,7 @@ from .vital_os import (
     VitalOS, Activity, VitalParam,
     ACTIVITIES, PARAMS, PARAM_TO_KWARG,
     DURATIONS, ACTIVITY_TAGS, TAG_EFFECTS,
-    INITIAL_BELIEFS, compute_true_effect,
+    INITIAL_BELIEFS, LOCATIONS, compute_true_effect,
 )
 
 ZEN_API_KEY = os.environ.get("OPENCODE_ZEN_API_KEY", "")
@@ -85,6 +85,8 @@ CHOICE_PROMPT = """[{time}] 今の気分
 - 孤独 {loneliness}/100 ({loneliness_desc})
 - 気分 {spirit}/100 ({spirit_desc})
 
+居場所: {room_desc}
+
 最近やったこと: {recent}
 
 今、何をする？
@@ -140,7 +142,7 @@ class ConsciousVitalOS(VitalOS):
     def _choice_str(self, candidates: list[tuple[str, int]]) -> str:
         lines = []
         for name, dur in candidates:
-            true_eff = compute_true_effect(name, dur)
+            true_eff = compute_true_effect(name, dur, self.current_room)
             eff_str = " ".join(f"{p}:{true_eff[p]:+.1f}" for p in PARAMS)
             tags = ACTIVITY_TAGS.get(name, {})
             tag_str = ", ".join(f"{t}:{v:.1f}" for t, v in sorted(tags.items()))
@@ -161,6 +163,9 @@ class ConsciousVitalOS(VitalOS):
         recent = self.history[-5:] if self.history else []
         recent_str = "; ".join(f"{e.time}:{e.activity}" for e in recent) or "none"
 
+        loc = LOCATIONS.get(self.current_room, LOCATIONS["bedroom"])
+        adj_desc = "、".join(LOCATIONS[a]["name_ja"] for a in loc["adjacent"] if a in LOCATIONS)
+
         prompt = CHOICE_PROMPT.format(
             time=self.time.strftime("%H:%M"),
             energy=int(self.state.energy),
@@ -171,6 +176,7 @@ class ConsciousVitalOS(VitalOS):
             hunger_desc=_describe("hunger", self.state.hunger),
             loneliness_desc=_describe("loneliness", self.state.loneliness),
             spirit_desc=_describe("spirit", self.state.spirit),
+            room_desc=f"{loc['name_ja']} — {loc['desc']}（隣: {adj_desc}）",
             recent=recent_str,
             choices=self._choice_str(candidates),
             tag_info=self._tag_info_str(),
