@@ -11,6 +11,7 @@ from pathlib import Path
 class VitalParam(Enum):
     ENERGY = "energy"
     HUNGER = "hunger"
+    FATIGUE = "fatigue"
     LONELINESS = "loneliness"
     SPIRIT = "spirit"
 
@@ -19,6 +20,7 @@ PARAMS = [p.name.lower() for p in VitalParam]
 
 PARAM_TO_KWARG = {
     "energy": "energy_delta", "hunger": "hunger_delta",
+    "fatigue": "fatigue_delta",
     "loneliness": "loneliness_delta", "spirit": "spirit_delta",
 }
 
@@ -63,14 +65,14 @@ MOVE_TIME = 3  # 部屋移動にかかる基本時間(分)
 # タグ1単位あたりのE/H/L/Sへの1時間あたり効果
 # 設計指針: 8h睡眠後の起床時Eが~70程度、3食で空腹が持続可能な範囲
 TAG_EFFECTS = {
-    "exertion":  {"energy": -10, "hunger": +2,  "loneliness":  0, "spirit": +3},
-    "social":    {"energy":  -2, "hunger":  0,  "loneliness":-18, "spirit": +6},
-    "mental":    {"energy":  -5, "hunger":  0,  "loneliness":  0, "spirit": +3},
-    "outdoor":   {"energy":   0, "hunger":  0,  "loneliness": -6, "spirit": +4},
-    "play":      {"energy":  -3, "hunger":  0,  "loneliness": -2, "spirit":+10},
-    "rest":      {"energy":  +9, "hunger": +1,  "loneliness":  0, "spirit": -1},
-    "nourish":   {"energy":  +4, "hunger":-40,  "loneliness":  0, "spirit": +2},
-    "boredom":   {"energy":  -1, "hunger": +1,  "loneliness": +1, "spirit": -1},
+    "exertion":  {"energy": -12, "hunger": +3, "fatigue": +8,  "loneliness":  0, "spirit": +3},
+    "social":    {"energy":  -2, "hunger": +1, "fatigue": +1,  "loneliness":-18, "spirit": +6},
+    "mental":    {"energy":  -4, "hunger": +1, "fatigue": +1,  "loneliness":  0, "spirit": +3},
+    "outdoor":   {"energy":  -2, "hunger": +1, "fatigue": +3,  "loneliness": -6, "spirit": +4},
+    "play":      {"energy":  -5, "hunger": +1, "fatigue": +5,  "loneliness": -2, "spirit":+10},
+    "rest":      {"energy":  +6, "hunger":  0, "fatigue": -7,  "loneliness":  0, "spirit": -1},
+    "nourish":   {"energy":  +7, "hunger":-38, "fatigue": -2,  "loneliness":  0, "spirit": +2},
+    "boredom":   {"energy":  -1, "hunger": +1, "fatigue":  0,  "loneliness": +1, "spirit": -2},
 }
 
 ACTIVITY_TAGS = {
@@ -108,19 +110,19 @@ def compute_true_effect(activity_name: str, duration_minutes: int,
 
 # エージェントの事前信念（初期モデル、世界層とはズレている）
 INITIAL_BELIEFS = {
-    "sleep": {"energy": 30, "hunger": 5, "loneliness": 2, "spirit": -3},
-    "deep_sleep": {"energy": 40, "hunger": 5, "loneliness": 1, "spirit": 0},
-    "eat": {"energy": 5, "hunger": -40, "loneliness": 0, "spirit": 2},
-    "piano": {"energy": -8, "hunger": 2, "loneliness": -2, "spirit": 12},
-    "piano_long": {"energy": -15, "hunger": 3, "loneliness": -3, "spirit": 20},
-    "read": {"energy": -5, "hunger": 1, "loneliness": -1, "spirit": 8},
-    "idle": {"energy": -3, "hunger": 1, "loneliness": 5, "spirit": -3},
-    "rest": {"energy": 10, "hunger": 0, "loneliness": 4, "spirit": -2},
-    "stretch": {"energy": 5, "hunger": 0, "loneliness": 0, "spirit": 3},
-    "write_diary": {"energy": -3, "hunger": 0, "loneliness": -5, "spirit": 5},
-    "walk": {"energy": -5, "hunger": 3, "loneliness": -5, "spirit": 10},
-    "talk": {"energy": -2, "hunger": 0, "loneliness": -15, "spirit": 5},
-    "talk_to_user": {"energy": -3, "hunger": 0, "loneliness": -14, "spirit": 6},
+    "sleep": {"energy": 30, "hunger": 5, "fatigue": -25, "loneliness": 2, "spirit": -3},
+    "deep_sleep": {"energy": 40, "hunger": 5, "fatigue": -35, "loneliness": 1, "spirit": 0},
+    "eat": {"energy": 5, "hunger": -40, "fatigue": -2, "loneliness": 0, "spirit": 2},
+    "piano": {"energy": -8, "hunger": 2, "fatigue": 6, "loneliness": -2, "spirit": 12},
+    "piano_long": {"energy": -15, "hunger": 3, "fatigue": 10, "loneliness": -3, "spirit": 20},
+    "read": {"energy": -5, "hunger": 1, "fatigue": 2, "loneliness": -1, "spirit": 8},
+    "idle": {"energy": -3, "hunger": 1, "fatigue": 1, "loneliness": 5, "spirit": -3},
+    "rest": {"energy": 10, "hunger": 0, "fatigue": -10, "loneliness": 4, "spirit": -2},
+    "stretch": {"energy": 5, "hunger": 0, "fatigue": -3, "loneliness": 0, "spirit": 3},
+    "write_diary": {"energy": -3, "hunger": 0, "fatigue": 1, "loneliness": -5, "spirit": 5},
+    "walk": {"energy": -5, "hunger": 3, "fatigue": 8, "loneliness": -5, "spirit": 10},
+    "talk": {"energy": -2, "hunger": 0, "fatigue": 1, "loneliness": -15, "spirit": 5},
+    "talk_to_user": {"energy": -3, "hunger": 0, "fatigue": 1, "loneliness": -14, "spirit": 6},
 }
 
 DURATIONS = {"sleep": 60, "deep_sleep": 60, "eat": 30, "rest": 30,
@@ -135,6 +137,7 @@ class Activity:
     duration_minutes: int
     energy_delta: float = 0
     hunger_delta: float = 0
+    fatigue_delta: float = 0
     loneliness_delta: float = 0
     spirit_delta: float = 0
     is_rest: bool = False
@@ -149,13 +152,15 @@ ACTIVITIES["rest"].is_rest = True
 SETPOINTS = {
     VitalParam.ENERGY: 65,
     VitalParam.HUNGER: 25,
+    VitalParam.FATIGUE: 10,
     VitalParam.LONELINESS: 25,
     VitalParam.SPIRIT: 65,
 }
 
 DRIFT_RATES = {
-    VitalParam.ENERGY: -4,
-    VitalParam.HUNGER: 2,
+    VitalParam.ENERGY: -3,      # 基礎代謝（重力下で生存するだけで消費）
+    VitalParam.HUNGER: 1.5,     # 血糖値の自然減少
+    VitalParam.FATIGUE: 0,      # 疲労は自然には減らない（休息が必要）
     VitalParam.LONELINESS: 0.5,
     VitalParam.SPIRIT: -1.0,
 }
@@ -165,6 +170,7 @@ DRIFT_RATES = {
 class VitalState:
     energy: float = 55
     hunger: float = 45
+    fatigue: float = 5
     loneliness: float = 40
     spirit: float = 50
 
@@ -464,8 +470,12 @@ class VitalOS:
         s = self.state
         if s.hunger > 80:
             return ("eat", 30)
+        if s.fatigue > 80:
+            return ("sleep", 90)
         if s.energy < 15:
             return ("sleep", 120)
+        if s.fatigue > 60:
+            return ("rest", 60)
         if s.energy < 25:
             return ("rest", 60)
         if s.loneliness > 80:
