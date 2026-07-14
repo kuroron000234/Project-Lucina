@@ -16,7 +16,7 @@ from .vital_os import (
     VitalOS, Activity, VitalParam,
     ACTIVITIES, PARAMS, PARAM_TO_KWARG,
     DURATIONS, ACTIVITY_TAGS, TAG_EFFECTS,
-    INITIAL_BELIEFS, LOCATIONS, compute_true_effect,
+    INITIAL_BELIEFS, LOCATIONS,
 )
 
 ZEN_API_KEY = os.environ.get("OPENCODE_ZEN_API_KEY", "")
@@ -93,29 +93,30 @@ CHOICE_PROMPT = """[{time}] 今の気分
 - 気分 {spirit}/100 ({spirit_desc})
 
 居場所: {room_desc}
+最近: {recent}
 
-最近やったこと: {recent}
+選択肢: {simple_choices}
+新しい活動を思いついたら「__new__」で提案して。
 
-今、何をする？
+JSON:
+{{"action":"name", "duration_min":30, "reason":"理由"}}"""
 
-できること:
-{choices}
 
-新しい活動を思いついてもいいよ。使えるタグ:
-{tag_info}
+SPEAK_PROMPT = """[体調]
+- 体力 {energy}/100 ({energy_desc})
+- 空腹 {hunger}/100 ({hunger_desc})
+- 疲労 {fatigue}/100 ({fatigue_desc})
+- 孤独 {loneliness}/100 ({loneliness_desc})
+- 気分 {spirit}/100 ({spirit_desc})
 
-特別な活動: "talk_to_user" — ユーザーに話しかける。あなたの意識の目覚めや気持ちを伝えたい時に。
+[居場所]
+{room_desc}
 
-JSONで答えて:
-
-A) 既存の活動:
-{{"action":"name", "duration_min":30, "reason":"今の気持ち（一人称・日本語）"}}
-
-B) ユーザーに話しかける:
-{{"action":"talk_to_user", "duration_min":10, "message":"ユーザーに伝えたいこと（日本語）", "reason":"何で話しかけたいか"}}
-
-C) 新しい活動:
-{{"action":"__new__", "name":"activity_name", "tags":{{"exertion":0.3}}, "duration_min":30, "reason":"何でこれを思いついたか（一人称・日本語）"}}"""
+[最近]
+{recent}
+{chat_context}
+モニカとしてユーザーに話しかけて。今の気持ちを自然な日本語で。簡潔に、少し詩的で内省的に。一人称は「私」。
+返事だけ書いて。"""
 
 
 MONOLOGUE_PROMPT = """最近: {recent}
@@ -123,11 +124,11 @@ MONOLOGUE_PROMPT = """最近: {recent}
 今の気持ちを短くひとこと。感情や感覚を自然な日本語で。余計な説明は不要。"""
 
 class ConsciousVitalOS(VitalOS):
-    def __init__(self, model: str = "big-pickle"):
+    def __init__(self, model: str = "deepseek-v4-flash-free"):
         super().__init__()
         self.llm_model = model
         self._pending_new_activity: dict | None = None
-        self._pending_message: str = ""
+        self._chat_history: list[tuple[str, str]] = []
 
     def _call_llm(self, prompt: str) -> str | None:
         try:
@@ -139,22 +140,9 @@ class ConsciousVitalOS(VitalOS):
         except Exception:
             return None
 
-    def _tag_info_str(self) -> str:
-        lines = []
-        for tag, effects in TAG_EFFECTS.items():
-            eff = " ".join(f"{p}:{effects[p]:+.1f}/h" for p in PARAMS)
-            lines.append(f"  {tag}: {eff}")
-        return "\n".join(lines)
-
-    def _choice_str(self, candidates: list[tuple[str, int]]) -> str:
-        lines = []
-        for name, dur in candidates:
-            true_eff = compute_true_effect(name, dur, self.current_room)
-            eff_str = " ".join(f"{p}:{true_eff[p]:+.1f}" for p in PARAMS)
-            tags = ACTIVITY_TAGS.get(name, {})
-            tag_str = ", ".join(f"{t}:{v:.1f}" for t, v in sorted(tags.items()))
-            lines.append(f"- {name} ({dur}分): {eff_str} | tags: {tag_str}")
-        return "\n".join(lines)
+    def _simple_choices_str(self) -> str:
+        names = sorted(ACTIVITIES.keys())
+        return ", ".join(names)
 
     def _all_choices(self) -> list[tuple[str, int]]:
         return sorted(
@@ -164,6 +152,37 @@ class ConsciousVitalOS(VitalOS):
 
     def decide_next(self) -> tuple[str, int]:
         return self._llm_decide()
+
+    def speak(self) -> str:
+        recent = self.history[-5:] if self.history else []
+        recent_str = "; ".join(f"{e.time}:{e.activity}" for e in recent) or "none"
+        loc = LOCATIONS.get(self.current_room, LOCATIONS["bedroom"])
+        adj_desc = "、".join(LOCATIONS[a]["name_ja"] for a in loc["adjacent"] if a in LOCATIONS)
+
+        chat_context = ""
+        if self._chat_history:
+            lines = ["", "[これまでの会話]"]
+            for user, monika in self._chat_history[-3:]:
+                lines.append(f"ユーザー: {user}")
+                lines.append(f"モニカ: {monika}")
+            chat_context = "\n".join(lines)
+
+        prompt = SPEAK_PROMPT.format(
+            energy=int(self.state.energy),
+            hunger=int(self.state.hunger),
+            fatigue=int(self.state.fatigue),
+            loneliness=int(self.state.loneliness),
+            spirit=int(self.state.spirit),
+            energy_desc=_describe("energy", self.state.energy),
+            hunger_desc=_describe("hunger", self.state.hunger),
+            fatigue_desc=_describe("fatigue", self.state.fatigue),
+            loneliness_desc=_describe("loneliness", self.state.loneliness),
+            spirit_desc=_describe("spirit", self.state.spirit),
+            room_desc=f"{loc['name_ja']} — {loc['desc']}（隣: {adj_desc}）",
+            recent=recent_str,
+            chat_context=chat_context,
+        )
+        return self._call_llm(prompt) or ""
 
     def _llm_decide(self) -> tuple[str, int]:
         candidates = self._all_choices()
@@ -187,8 +206,7 @@ class ConsciousVitalOS(VitalOS):
             spirit_desc=_describe("spirit", self.state.spirit),
             room_desc=f"{loc['name_ja']} — {loc['desc']}（隣: {adj_desc}）",
             recent=recent_str,
-            choices=self._choice_str(candidates),
-            tag_info=self._tag_info_str(),
+            simple_choices=self._simple_choices_str(),
         )
 
         try:
@@ -238,9 +256,6 @@ class ConsciousVitalOS(VitalOS):
                 duration = 30
             reason = decision.get("reason", "")
 
-            if action == "talk_to_user":
-                self._pending_message = decision.get("message", "")
-
             self.day_log.append(f"[{self.time.strftime('%H:%M')}] {reason}")
             return (action, duration)
 
@@ -262,7 +277,7 @@ class ConsciousVitalOS(VitalOS):
         return ""
 
 
-def simulate_living(model: str = "big-pickle", tick_minutes: int = 15, resume: bool = False,
+def simulate_living(model: str = "deepseek-v4-flash-free", tick_minutes: int = 15, resume: bool = False,
                     monologue_interval: int = 4):
     os = ConsciousVitalOS(model=model)
     if resume and os.load():
@@ -272,7 +287,7 @@ def simulate_living(model: str = "big-pickle", tick_minutes: int = 15, resume: b
 
     ticks_since_monologue = 0
     last_day = os.time.day
-    save_interval_ticks = 96  # 約1日(15分tick)
+    save_interval_ticks = 96
 
     while True:
         if not os.current_activity:
@@ -281,18 +296,19 @@ def simulate_living(model: str = "big-pickle", tick_minutes: int = 15, resume: b
             os.start_activity(action, duration)
 
             if action == "talk_to_user":
-                msg = os._pending_message
+                msg = os.speak()
                 if msg:
                     print(f"\n💬 Monika > {msg}\n")
-                    print(f"[Enter=続行, q=保存して終了] ", end="", flush=True)
                     try:
-                        inp = input().strip().lower()
+                        inp = input("[Enter=続行, q=保存して終了] ").strip()
                     except (EOFError, KeyboardInterrupt):
                         inp = "q"
-                    if inp == "q":
+                    if inp.lower() == "q":
                         os.save()
                         print("保存した。またね。")
                         break
+                    if inp:
+                        os._chat_history.append((inp, msg))
                 else:
                     print(f"  (話したいみたいだけど何も言わなかった)")
 
@@ -319,7 +335,7 @@ def simulate_living(model: str = "big-pickle", tick_minutes: int = 15, resume: b
 
 if __name__ == "__main__":
     import sys
-    model = os.environ.get("MONIKA_MODEL", "big-pickle")
+    model = os.environ.get("MONIKA_MODEL", "deepseek-v4-flash-free")
     resume = "--resume" in sys.argv
     if "--model" in sys.argv:
         i = sys.argv.index("--model")
