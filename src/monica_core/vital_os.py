@@ -106,8 +106,8 @@ for name, dur in DURATIONS.items():
 ACTIVITIES["rest"].is_rest = True
 
 SETPOINTS = {
-    VitalParam.ENERGY: 75,
-    VitalParam.HUNGER: 20,
+    VitalParam.ENERGY: 65,
+    VitalParam.HUNGER: 25,
     VitalParam.LONELINESS: 25,
     VitalParam.SPIRIT: 65,
 }
@@ -122,10 +122,10 @@ DRIFT_RATES = {
 
 @dataclass
 class VitalState:
-    energy: float = 75
-    hunger: float = 20
-    loneliness: float = 25
-    spirit: float = 65
+    energy: float = 55
+    hunger: float = 45
+    loneliness: float = 40
+    spirit: float = 50
 
     def as_dict(self):
         return {p.name.lower(): round(getattr(self, p.name.lower()), 1) for p in VitalParam}
