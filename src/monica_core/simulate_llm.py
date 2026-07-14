@@ -75,7 +75,7 @@ Your body has four vital signs (0-100):
 - Loneliness: need for connection. Rises when isolated, eased by social interaction
 - Spirit: emotional well-being. Fluctuates with activities
 
-The day starts at 7:00 and ends at 23:00 when you sleep. Make choices that feel natural for who you are."""
+Your time and actions are entirely free — sleep when you're tired, eat when you're hungry, do whatever feels right. Make choices that feel natural for who you are."""
 
 CHOICE_PROMPT = """[{time}] 今の気分
 
@@ -87,7 +87,7 @@ CHOICE_PROMPT = """[{time}] 今の気分
 
 最近やったこと: {recent}
 
-暇だから何しようかな。
+今、何をする？
 
 できること:
 {choices}
@@ -147,20 +147,17 @@ class ConsciousVitalOS(VitalOS):
             lines.append(f"- {name} ({dur}分): {eff_str} | tags: {tag_str}")
         return "\n".join(lines)
 
+    def _all_choices(self) -> list[tuple[str, int]]:
+        return sorted(
+            [(n, DURATIONS.get(n, 30)) for n in ACTIVITIES],
+            key=lambda x: x[0],
+        )
+
     def decide_next(self) -> tuple[str, int]:
-        hour = self.time.hour
-        if hour >= 23 or hour < 6:
-            return ("sleep", 480 if hour >= 23 else 360)
-        mandatory = self._mandatory_slot(hour)
-        if mandatory:
-            return mandatory
-        critical = self._critical_needs()
-        if critical:
-            return critical
         return self._llm_decide()
 
     def _llm_decide(self) -> tuple[str, int]:
-        candidates = self.free_time_choices()
+        candidates = self._all_choices()
         recent = self.history[-5:] if self.history else []
         recent_str = "; ".join(f"{e.time}:{e.activity}" for e in recent) or "none"
 
