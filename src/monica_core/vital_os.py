@@ -89,7 +89,8 @@ ACTIVITY_TAGS = {
     "write_diary":  {"mental": 0.5, "play": 0.4},
     "walk":         {"exertion": 0.3, "outdoor": 0.8, "play": 0.1},
     "talk":         {"social": 0.9, "mental": 0.2},
-    "talk_to_user": {"social": 0.7, "mental": 0.3, "play": 0.1},
+    "send_message": {"social": 0.3, "mental": 0.6},
+    "check_phone":  {"mental": 0.4, "boredom": 0.3},
 }
 
 
@@ -123,13 +124,14 @@ INITIAL_BELIEFS = {
     "write_diary": {"energy": -3, "hunger": 0, "fatigue": 1, "loneliness": -5, "spirit": 5},
     "walk": {"energy": -5, "hunger": 3, "fatigue": 8, "loneliness": -5, "spirit": 10},
     "talk": {"energy": -2, "hunger": 0, "fatigue": 1, "loneliness": -15, "spirit": 5},
-    "talk_to_user": {"energy": -3, "hunger": 0, "fatigue": 1, "loneliness": -14, "spirit": 6},
+    "send_message": {"energy": -1, "hunger": 0, "fatigue": 0, "loneliness": 0, "spirit": 2},
+    "check_phone": {"energy": 0, "hunger": 0, "fatigue": 0, "loneliness": -2, "spirit": 1},
 }
 
 DURATIONS = {"sleep": 60, "deep_sleep": 60, "eat": 30, "rest": 30,
              "stretch": 15, "talk": 15, "walk": 30, "piano_long": 60,
              "piano": 30, "read": 60, "idle": 30, "write_diary": 30,
-             "talk_to_user": 10}
+             "send_message": 10, "check_phone": 10}
 
 
 @dataclass
@@ -196,6 +198,13 @@ class Event:
     activity: str
     state_before: dict
     state_after: dict
+
+
+@dataclass
+class PhoneState:
+    consecutive_empty_checks: int = 0
+    last_outgoing_time: str = ""
+    last_outgoing_text: str = ""
 
 
 EXPLORATION_EPSILON = 0.15
@@ -288,6 +297,7 @@ class VitalOS:
         self.activity_start_time: Optional[datetime] = None
         self.activity_total_duration: int = 0
         self.current_room: str = "bedroom"
+        self.phone: PhoneState = PhoneState()
 
     DATA_DIR = Path(__file__).resolve().parents[2] / "data"
     
@@ -314,6 +324,11 @@ class VitalOS:
             "last_done": {
                 name: t.isoformat() if t else None
                 for name, t in self.model.last_done_time.items()
+            },
+            "phone": {
+                "consecutive_empty_checks": self.phone.consecutive_empty_checks,
+                "last_outgoing_time": self.phone.last_outgoing_time,
+                "last_outgoing_text": self.phone.last_outgoing_text,
             },
         }
         path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -343,6 +358,10 @@ class VitalOS:
                 self.model.last_done_time[name] = (
                     datetime.fromisoformat(t_str) if t_str else None
                 )
+            phone_data = data.get("phone", {})
+            self.phone.consecutive_empty_checks = phone_data.get("consecutive_empty_checks", 0)
+            self.phone.last_outgoing_time = phone_data.get("last_outgoing_time", "")
+            self.phone.last_outgoing_text = phone_data.get("last_outgoing_text", "")
             return True
         except Exception:
             return False
@@ -513,7 +532,8 @@ class VitalOS:
             choices.append(("talk", 15))
         if s.energy > 15 and self.model.counts.get("piano", 0) == 0:
             choices.append(("piano", 30))
-        choices.append(("talk_to_user", 10))
+        choices.append(("send_message", 10))
+        choices.append(("check_phone", 10))
         return choices
 
     def decide_next(self) -> tuple[str, int]:

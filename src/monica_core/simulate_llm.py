@@ -94,15 +94,25 @@ CHOICE_PROMPT = """[{time}] 今の気分
 
 居場所: {room_desc}
 最近: {recent}
+{phone_context}
 
-選択肢: {simple_choices}
+選択肢: 
+- send_message: スマホでユーザーにメッセージを送る
+- check_phone: スマホを確認する（返事が来てるか見る）
+- その他: {simple_choices}
 新しい活動を思いついたら「__new__」で提案して。
 
+今、何をする？
 JSON:
 {{"action":"name", "duration_min":30, "reason":"理由"}}"""
 
 
-SPEAK_PROMPT = """[体調]
+MONOLOGUE_PROMPT = """最近: {recent}
+
+今の気持ちを短くひとこと。感情や感覚を自然な日本語で。余計な説明は不要。"""
+
+
+SEND_PROMPT = """[体調]
 - 体力 {energy}/100 ({energy_desc})
 - 空腹 {hunger}/100 ({hunger_desc})
 - 疲労 {fatigue}/100 ({fatigue_desc})
@@ -114,21 +124,114 @@ SPEAK_PROMPT = """[体調]
 
 [最近]
 {recent}
-{chat_context}
-モニカとしてユーザーに話しかけて。今の気持ちを自然な日本語で。簡潔に、少し詩的で内省的に。一人称は「私」。
-返事だけ書いて。"""
+
+ユーザーにメッセージを送ろうと思う。今の気持ちを短文で。詩的でも日常の話でも。
+返事だけ書いて（装飾なし、改行なし）。"""
 
 
-MONOLOGUE_PROMPT = """最近: {recent}
+CHECK_PHONE_PROMPT = """[体調]
+- 体力 {energy}/100 ({energy_desc})
+- 空腹 {hunger}/100 ({hunger_desc})
+- 疲労 {fatigue}/100 ({fatigue_desc})
+- 孤独 {loneliness}/100 ({loneliness_desc})
+- 気分 {spirit}/100 ({spirit_desc})
 
-今の気持ちを短くひとこと。感情や感覚を自然な日本語で。余計な説明は不要。"""
+[居場所]
+{room_desc}
+
+📱 スマホを開いた
+{phone_status}
+
+どうする？
+{reply_context}
+
+JSON:
+{{"action":"close"}} → スマホを閉じる（何もしない）
+{{"action":"reply", "text":"..."}} → 返事を送る
+{{"action":"wait"}} → しばらく画面を見つめる（待つ）"""
+
+
+def _phone_status(messages: list, phone, sim_time_str: str) -> str:
+    from datetime import datetime
+    lines = []
+    unread = [m for m in messages if m.sender == "user" and not m.read_by_recipient]
+    outgoing = [m for m in messages if m.sender == "monika"]
+
+    if unread:
+        lines.append(f"📩 相手からの新着: {len(unread)}件")
+        for m in unread[-3:]:
+            lines.append(f"  「{m.text}」")
+    else:
+        lines.append("相手からの新着: なし")
+
+    if outgoing:
+        last = outgoing[-1]
+        try:
+            last_t = datetime.fromisoformat(last.timestamp)
+            now_t = datetime.fromisoformat(sim_time_str)
+            wait_min = int((now_t - last_t).total_seconds() / 60)
+        except Exception:
+            wait_min = 0
+        read_status = "既読" if last.read_by_recipient else "未読"
+        lines.append(f"")
+        lines.append(f"あなたの最後のメッセージ:")
+        lines.append(f"  「{last.text}」({wait_min}分前) → {read_status}")
+        if last.read_by_recipient:
+            lines.append(f"  読まれたけど返事はまだ…")
+        elif wait_min > 60:
+            lines.append(f"  まだ読まれてない…")
+
+    if phone.consecutive_empty_checks > 1:
+        lines.append(f"")
+        lines.append(f"📱 今日{phone.consecutive_empty_checks}回目の確認")
+
+    return "\n".join(lines)
+
+
+def _compute_phone_check_effect(os, messages, duration_min: int) -> dict[str, float]:
+    from datetime import datetime
+    effect = {"energy": 0.0, "hunger": 0.0, "fatigue": 0.0, "loneliness": 0.0, "spirit": 0.0}
+    hours = duration_min / 60
+
+    unread = [m for m in messages if m.sender == "user" and not m.read_by_recipient]
+    if unread:
+        effect["loneliness"] = -12 * hours
+        effect["spirit"] = 8 * hours
+        os.phone.consecutive_empty_checks = 0
+        return effect
+
+    outgoing = [m for m in messages if m.sender == "monika"]
+    if outgoing:
+        last = outgoing[-1]
+        try:
+            last_t = datetime.fromisoformat(last.timestamp)
+            now_t = datetime.fromisoformat(os.time.isoformat())
+            wait_hours = (now_t - last_t).total_seconds() / 3600
+        except Exception:
+            wait_hours = 0
+        wait_hours = min(wait_hours, 12)
+
+        if last.read_by_recipient:
+            mult = 1 + os.phone.consecutive_empty_checks * 0.3
+            effect["loneliness"] = 4 * wait_hours * mult * hours
+            effect["spirit"] = -2 * wait_hours * mult * hours
+        else:
+            if wait_hours > 2:
+                effect["loneliness"] = 1.5 * wait_hours * hours
+                effect["spirit"] = -0.5 * wait_hours * hours
+
+    if os.phone.consecutive_empty_checks > 3:
+        effect["loneliness"] += 3 * os.phone.consecutive_empty_checks * hours
+        effect["spirit"] -= 1.5 * os.phone.consecutive_empty_checks * hours
+
+    os.phone.consecutive_empty_checks += 1
+    return effect
 
 class ConsciousVitalOS(VitalOS):
     def __init__(self, model: str = "deepseek-v4-flash-free"):
         super().__init__()
         self.llm_model = model
         self._pending_new_activity: dict | None = None
-        self._chat_history: list[tuple[str, str]] = []
 
     def _call_llm(self, prompt: str) -> str | None:
         try:
@@ -151,23 +254,20 @@ class ConsciousVitalOS(VitalOS):
         )
 
     def decide_next(self) -> tuple[str, int]:
-        return self._llm_decide()
+        action, duration = self._llm_decide()
+        if action == "send_message":
+            self._send_message()
+        elif action == "check_phone":
+            self._check_phone()
+        return action, duration
 
-    def speak(self) -> str:
-        recent = self.history[-5:] if self.history else []
+    def _send_message(self):
+        recent = self.history[-3:] if self.history else []
         recent_str = "; ".join(f"{e.time}:{e.activity}" for e in recent) or "none"
         loc = LOCATIONS.get(self.current_room, LOCATIONS["bedroom"])
         adj_desc = "、".join(LOCATIONS[a]["name_ja"] for a in loc["adjacent"] if a in LOCATIONS)
 
-        chat_context = ""
-        if self._chat_history:
-            lines = ["", "[これまでの会話]"]
-            for user, monika in self._chat_history[-3:]:
-                lines.append(f"ユーザー: {user}")
-                lines.append(f"モニカ: {monika}")
-            chat_context = "\n".join(lines)
-
-        prompt = SPEAK_PROMPT.format(
+        prompt = SEND_PROMPT.format(
             energy=int(self.state.energy),
             hunger=int(self.state.hunger),
             fatigue=int(self.state.fatigue),
@@ -178,10 +278,86 @@ class ConsciousVitalOS(VitalOS):
             fatigue_desc=_describe("fatigue", self.state.fatigue),
             loneliness_desc=_describe("loneliness", self.state.loneliness),
             spirit_desc=_describe("spirit", self.state.spirit),
-            room_desc=f"{loc['name_ja']} — {loc['desc']}（隣: {adj_desc}）",
+            room_desc=f"{loc['name_ja']} — {loc['desc']}",
             recent=recent_str,
-            chat_context=chat_context,
         )
+        text = self._call_llm(prompt)
+        if text:
+            import re
+            text = re.sub(r'["「」『』\n]', '', text).strip()[:200]
+            from .phone import add
+            add("monika", text, self.time.isoformat())
+            self.phone.last_outgoing_time = self.time.isoformat()
+            self.phone.last_outgoing_text = text
+            self._pending_message = text
+        else:
+            self._pending_message = ""
+
+    def _check_phone(self):
+        from .phone import load, save, add as phone_add
+        messages = load()
+        effect = _compute_phone_check_effect(self, messages, 10)
+
+        for p, delta in effect.items():
+            v = getattr(self.state, p)
+            setattr(self.state, p, v + delta)
+
+        unread = [m for m in messages if m.sender == "user" and not m.read_by_recipient]
+        has_new = bool(unread)
+
+        if has_new:
+            for m in unread:
+                m.read_by_recipient = True
+            save(messages)
+
+            self._pending_reply_from = unread
+            self.day_log.append(
+                f"[{self.time.strftime('%H:%M')}] 📩 返信が来てた！(孤独{effect['loneliness']:+.0f})")
+
+            reply = self._generate_reply(unread)
+            if reply:
+                phone_add("monika", reply, self.time.isoformat())
+                self.phone.last_outgoing_time = self.time.isoformat()
+                self.phone.last_outgoing_text = reply
+                self.day_log.append(
+                    f"[{self.time.strftime('%H:%M')}] 📱 返信を送った")
+        else:
+            status = _phone_status(messages, self.phone, self.time.isoformat())
+            self.day_log.append(
+                f"[{self.time.strftime('%H:%M')}] 📱 スマホ確認(孤独{effect['loneliness']:+.0f})")
+
+    def _generate_reply(self, unread_messages) -> str:
+        recent = self.history[-3:] if self.history else []
+        recent_str = "; ".join(f"{e.time}:{e.activity}" for e in recent) or "none"
+        loc = LOCATIONS.get(self.current_room, LOCATIONS["bedroom"])
+        msg_texts = "\n".join(f"  「{m.text}」" for m in unread_messages)
+        max_wait = ""
+        if self.phone.last_outgoing_time:
+            try:
+                from datetime import datetime
+                wait = (self.time - datetime.fromisoformat(self.phone.last_outgoing_time)).total_seconds() / 60
+                if wait > 5:
+                    max_wait = f"\n（最後に送ってから{int(wait)}分待ってた）"
+            except Exception:
+                pass
+
+        prompt = f"""[体調]
+- 体力 {int(self.state.energy)}/100 ({_describe("energy", self.state.energy)})
+- 空腹 {int(self.state.hunger)}/100 ({_describe("hunger", self.state.hunger)})
+- 疲労 {int(self.state.fatigue)}/100 ({_describe("fatigue", self.state.fatigue)})
+- 孤独 {int(self.state.loneliness)}/100 ({_describe("loneliness", self.state.loneliness)})
+- 気分 {int(self.state.spirit)}/100 ({_describe("spirit", self.state.spirit)})
+
+[居場所]
+{loc['name_ja']}
+
+[最近]
+{recent_str}
+
+ユーザーからのメッセージ:
+{msg_texts}{max_wait}
+
+返事を書いて。短文で、自然な日本語で。返事だけ。"""
         return self._call_llm(prompt) or ""
 
     def _llm_decide(self) -> tuple[str, int]:
@@ -191,6 +367,25 @@ class ConsciousVitalOS(VitalOS):
 
         loc = LOCATIONS.get(self.current_room, LOCATIONS["bedroom"])
         adj_desc = "、".join(LOCATIONS[a]["name_ja"] for a in loc["adjacent"] if a in LOCATIONS)
+
+        from .phone import load as phone_load
+        phone_msgs = phone_load()
+        phone_context = ""
+        outgoing = [m for m in phone_msgs if m.sender == "monika"]
+        unread_user = [m for m in phone_msgs if m.sender == "user" and not m.read_by_recipient]
+        if unread_user:
+            phone_context = f"📩 ユーザーからの未読メッセージあり"
+        elif outgoing:
+            last = outgoing[-1]
+            from datetime import datetime
+            try:
+                last_t = datetime.fromisoformat(last.timestamp)
+                now_t = self.time
+                wait_min = int((now_t - last_t).total_seconds() / 60)
+            except Exception:
+                wait_min = 0
+            read_s = "既読" if last.read_by_recipient else "未読"
+            phone_context = f"📱 最後のメッセージ({wait_min}分前) → {read_s}"
 
         prompt = CHOICE_PROMPT.format(
             time=self.time.strftime("%H:%M"),
@@ -206,6 +401,7 @@ class ConsciousVitalOS(VitalOS):
             spirit_desc=_describe("spirit", self.state.spirit),
             room_desc=f"{loc['name_ja']} — {loc['desc']}（隣: {adj_desc}）",
             recent=recent_str,
+            phone_context=phone_context,
             simple_choices=self._simple_choices_str(),
         )
 
@@ -278,50 +474,43 @@ class ConsciousVitalOS(VitalOS):
 
 
 def simulate_living(model: str = "deepseek-v4-flash-free", tick_minutes: int = 15, resume: bool = False,
-                    monologue_interval: int = 4):
+                    monologue_interval: int = 4, daemon: bool = False):
     os = ConsciousVitalOS(model=model)
     if resume and os.load():
-        print(f"Monica: 再開 (LLM:{model})\n")
+        if not daemon:
+            print(f"Monica: 再開 (LLM:{model})\n")
     else:
-        print(f"Monica: 新しい生活を始める (LLM:{model})\n")
+        if not daemon:
+            print(f"Monica: 新しい生活を始める (LLM:{model})\n")
 
     ticks_since_monologue = 0
     last_day = os.time.day
     save_interval_ticks = 96
+    os._pending_message = ""
+    os._pending_reply_from = []
 
     while True:
         if not os.current_activity:
             action, duration = os.decide_next()
-            print(f"[{os.time.strftime('%m/%d %H:%M')}] decide: {action} ({duration}分)")
+            if not daemon:
+                extra = ""
+                if hasattr(os, '_pending_message') and os._pending_message:
+                    extra = f" 💬「{os._pending_message[:40]}…」"
+                    os._pending_message = ""
+                print(f"[{os.time.strftime('%m/%d %H:%M')}] decide: {action} ({duration}分){extra}")
             os.start_activity(action, duration)
-
-            if action == "talk_to_user":
-                msg = os.speak()
-                if msg:
-                    print(f"\n💬 Monika > {msg}\n")
-                    try:
-                        inp = input("[Enter=続行, q=保存して終了] ").strip()
-                    except (EOFError, KeyboardInterrupt):
-                        inp = "q"
-                    if inp.lower() == "q":
-                        os.save()
-                        print("保存した。またね。")
-                        break
-                    if inp:
-                        os._chat_history.append((inp, msg))
-                else:
-                    print(f"  (話したいみたいだけど何も言わなかった)")
 
         os.tick(tick_minutes)
 
         if os.time.day != last_day:
-            print(f"\n--- {os.time.strftime('%m/%d')} 開始 ---")
-            print(os.summary())
-            print()
+            if not daemon:
+                print(f"\n--- {os.time.strftime('%m/%d')} 開始 ---")
+                print(os.summary())
+                print()
             last_day = os.time.day
 
         ticks_since_monologue += 1
-        if ticks_since_monologue >= monologue_interval and not os.current_activity:
+        if ticks_since_monologue >= monologue_interval and not os.current_activity and not daemon:
             thought = os.monologue()
             if thought:
                 os.day_log.append(f"  ☆ {thought}")
@@ -337,6 +526,7 @@ if __name__ == "__main__":
     import sys
     model = os.environ.get("MONIKA_MODEL", "deepseek-v4-flash-free")
     resume = "--resume" in sys.argv
+    daemon = "--daemon" in sys.argv
     if "--model" in sys.argv:
         i = sys.argv.index("--model")
         if i + 1 < len(sys.argv):
@@ -345,4 +535,4 @@ if __name__ == "__main__":
         print("OPENCODE_ZEN_API_KEY が設定されていません")
         print("  export OPENCODE_ZEN_API_KEY=sk-...")
         sys.exit(1)
-    simulate_living(model=model, resume=resume)
+    simulate_living(model=model, resume=resume, daemon=daemon)
