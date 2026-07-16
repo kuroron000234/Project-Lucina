@@ -337,6 +337,15 @@ class ConsciousVitalOS(VitalOS):
             )
 
     def decide_next(self) -> tuple[str, int]:
+        hour = self.time.hour
+        if hour >= 23 or hour < 6:
+            return ("sleep", 480 if hour >= 23 else 360)
+        mandatory = super()._mandatory_slot(hour)
+        if mandatory:
+            return mandatory
+        critical = super()._critical_needs()
+        if critical:
+            return critical
         action, duration = self._llm_decide()
         if action == "send_message":
             self._send_message()
@@ -672,6 +681,9 @@ def simulate_living(model: str = "deepseek-v4-flash-free", tick_minutes: int = 1
 
         os.tick(tick_minutes, advance_clock=not realtime)
 
+        if not daemon and hasattr(os, '_check_phone'):
+            os._check_phone()
+
         if os.time.day != last_day:
             if not daemon:
                 print(f"\n--- {os.time.strftime('%m/%d')} 開始 ---")
@@ -689,7 +701,7 @@ def simulate_living(model: str = "deepseek-v4-flash-free", tick_minutes: int = 1
         save_interval_ticks -= 1
         if save_interval_ticks <= 0:
             os.save()
-            save_interval_ticks = 4 if realtime else 96
+            save_interval_ticks = 1 if realtime else 96
 
         if realtime:
             _time.sleep(tick_minutes * 60)
