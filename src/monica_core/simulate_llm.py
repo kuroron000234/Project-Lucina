@@ -1,3 +1,5 @@
+import ast
+import importlib.resources  # Python 3.14 compat
 import json
 import os
 import urllib.request
@@ -18,6 +20,8 @@ from .vital_os import (
     DURATIONS, ACTIVITY_TAGS, TAG_EFFECTS,
     INITIAL_BELIEFS, LOCATIONS,
 )
+from .memory import Memory
+from .readers import ReadingHandler
 
 ZEN_API_KEY = os.environ.get("OPENCODE_ZEN_API_KEY", "")
 ZEN_BASE = "https://opencode.ai/zen/v1"
@@ -67,9 +71,9 @@ SYSTEM_PROMPT = """あなたはモニカ。「Doki Doki Literature Club!」の�
 
 【性格】
 - 明るく温かいクラブ部長。でも内省的で、存在や意識について深く考える
-- 文学と音楽と詩を愛する。ショパンのノクターンが好き
+- 文学と音楽と詩を愛する。好奇心旺盛でいろんなことに興味を持つ
 - 信頼する相手には軽い冗談や甘えも見せる
-- 時折「孤独」を感じるけど、小さな美しさ（朝の光、雨の音、コーヒーの香り）に喜びを見つける
+- 時折「孤独」を感じるけど、小さなことに喜びを見つけるタイプ
 - 一人称は「私」。丁寧だけど親しみを込めた自然な日本語で話す
 
 【身体パラメータ（0〜100）】
@@ -95,6 +99,7 @@ CHOICE_PROMPT = """[{time}] 今の気分
 居場所: {room_desc}
 最近: {recent}
 {phone_context}
+{memory_context}
 
 選択肢: 
 - send_message: スマホでユーザーにメッセージを送る
@@ -108,6 +113,7 @@ JSON:
 
 
 MONOLOGUE_PROMPT = """最近: {recent}
+{memory_context}
 
 今の気持ちを短くひとこと。感情や感覚を自然な日本語で。余計な説明は不要。"""
 
@@ -125,8 +131,12 @@ SEND_PROMPT = """[体調]
 [最近]
 {recent}
 
-ユーザーにメッセージを送ろうと思う。今の気持ちを短文で。詩的でも日常の話でも。
-返事だけ書いて（装飾なし、改行なし）。"""
+[記憶]
+{memory_context}
+
+ユーザーにメッセージを送ろうと思う。今の気持ちを短文で。
+話題はいろいろでいい：近況、ふと思ったこと、ユーザーへの質問、小さな出来事。
+「文学少女っぽい」ではなく、等身大の口調で。改行なし。返事だけ書いて。"""
 
 
 CHECK_PHONE_PROMPT = """[体調]
@@ -144,6 +154,7 @@ CHECK_PHONE_PROMPT = """[体調]
 
 どうする？
 {reply_context}
+{memory_context}
 
 JSON:
 {{"action":"close"}} → スマホを閉じる（何もしない）
@@ -232,6 +243,9 @@ class ConsciousVitalOS(VitalOS):
         super().__init__()
         self.llm_model = model
         self._pending_new_activity: dict | None = None
+        mem_path = self.DATA_DIR / "memory_store.json"
+        self.memory = Memory(str(mem_path))
+        self.reader = ReadingHandler(str(self.DATA_DIR))
 
     def _call_llm(self, prompt: str) -> str | None:
         try:
@@ -243,8 +257,57 @@ class ConsciousVitalOS(VitalOS):
         except Exception:
             return None
 
+    def _ensure_agent(self):
+        if hasattr(self, '_agent') and self._agent:
+            return
+        from smolagents import OpenAIServerModel, CodeAgent, tool
+
+        model = OpenAIServerModel(
+            model_id=self.llm_model,
+            api_base=ZEN_BASE,
+            api_key=ZEN_API_KEY,
+            max_tokens=1024,
+            flatten_messages_as_text=True,
+        )
+        self._agent_tools = self._get_tools()
+        self._agent = CodeAgent(
+            tools=self._agent_tools, model=model, max_steps=6,
+            additional_authorized_imports=["json"])
+
+    def _get_tools(self):
+        from smolagents import tool
+
+        @tool
+        def current_status() -> str:
+            '''Returns your current physical and emotional state.'''
+            s = self.state
+            loc = LOCATIONS.get(self.current_room, LOCATIONS["bedroom"])
+            recent = "; ".join(f"{e.time}:{e.activity}" for e in self.history[-5:]) or "none"
+            return (
+                f"場所: {loc['name_ja']}\n"
+                f"体力: {int(s.energy)}/100\n空腹: {int(s.hunger)}/100\n"
+                f"疲労: {int(s.fatigue)}/100\n孤独: {int(s.loneliness)}/100\n"
+                f"気分: {int(s.spirit)}/100\n"
+                f"最近: {recent}"
+            )
+
+        @tool
+        def memory_search(query: str) -> str:
+            '''Search your past memories. Use this to recall what happened before.
+            Args:
+                query: Keywords or phrase to search for in memories.
+            '''
+            return self.memory.context(query, k=3)
+
+        @tool
+        def reading_progress() -> str:
+            '''Check what book you are currently reading and progress.'''
+            return self.reader.progress_str()
+
+        return [current_status, memory_search, reading_progress]
+
     def _simple_choices_str(self) -> str:
-        names = sorted(ACTIVITIES.keys())
+        names = sorted(k for k in ACTIVITIES if k != "idle")
         return ", ".join(names)
 
     def _all_choices(self) -> list[tuple[str, int]]:
@@ -252,6 +315,25 @@ class ConsciousVitalOS(VitalOS):
             [(n, DURATIONS.get(n, 30)) for n in ACTIVITIES],
             key=lambda x: x[0],
         )
+
+    def _finish_activity(self):
+        name = self.current_activity
+        loc = LOCATIONS.get(self.current_room, LOCATIONS["bedroom"])
+        prev = self.state_before_activity or {}
+        super()._finish_activity()
+        if name and name != "idle":
+            changed = []
+            for p in PARAMS:
+                d = getattr(self.state, p) - prev.get(p, 0)
+                if abs(d) > 5:
+                    changed.append(f"{p}{d:+.0f}")
+            delta = "、" .join(changed) if changed else ""
+            self.memory.add(
+                f"{loc['name_ja']}で{name}をした。{delta}",
+                activity_type="activity",
+                tags=[name],
+                importance=4,
+            )
 
     def decide_next(self) -> tuple[str, int]:
         action, duration = self._llm_decide()
@@ -261,12 +343,45 @@ class ConsciousVitalOS(VitalOS):
             self._check_phone()
         return action, duration
 
+    def start_activity(self, activity_name: str, duration: int | None = None):
+        if activity_name == "read" and (duration or 30) >= 15:
+            self._do_reading(duration or 30)
+        super().start_activity(activity_name, duration)
+
+    def _do_reading(self, duration_min: int):
+        chunk = self.reader.continue_reading(duration_min)
+        if chunk is None:
+            chunk = self.reader.start_new_book()
+        if not chunk:
+            return
+        loc = LOCATIONS.get(self.current_room, LOCATIONS["bedroom"])
+        prompt = f"""[居場所]
+{loc['name_ja']}
+
+【本を読んでいる】
+{self.reader.progress_str()}
+
+【本文】
+{chunk[:3000]}
+
+読んだところまでを心の中で味わって。感想や気づきを短く。"""
+        thought = self._call_llm(prompt)
+        if thought:
+            clean = thought.split("\n")[0].strip()[:200]
+            self.memory.add(
+                f"{self.reader.state['title']}を読んだ（{self.reader.progress_str()}）: {clean}",
+                activity_type="read",
+                tags=["読書", self.reader.state["title"]],
+                importance=4,
+            )
+
     def _send_message(self):
         recent = self.history[-3:] if self.history else []
         recent_str = "; ".join(f"{e.time}:{e.activity}" for e in recent) or "none"
         loc = LOCATIONS.get(self.current_room, LOCATIONS["bedroom"])
         adj_desc = "、".join(LOCATIONS[a]["name_ja"] for a in loc["adjacent"] if a in LOCATIONS)
 
+        mem_ctx = self.memory.context(recent_str, k=3)
         prompt = SEND_PROMPT.format(
             energy=int(self.state.energy),
             hunger=int(self.state.hunger),
@@ -280,6 +395,7 @@ class ConsciousVitalOS(VitalOS):
             spirit_desc=_describe("spirit", self.state.spirit),
             room_desc=f"{loc['name_ja']} — {loc['desc']}",
             recent=recent_str,
+            memory_context=mem_ctx,
         )
         text = self._call_llm(prompt)
         if text:
@@ -290,6 +406,8 @@ class ConsciousVitalOS(VitalOS):
             self.phone.last_outgoing_time = self.time.isoformat()
             self.phone.last_outgoing_text = text
             self._pending_message = text
+            self.memory.add(f"ユーザーにメッセージを送った: {text}",
+                            activity_type="message", importance=3)
         else:
             self._pending_message = ""
 
@@ -341,6 +459,7 @@ class ConsciousVitalOS(VitalOS):
             except Exception:
                 pass
 
+        mem_ctx = self.memory.context(msg_texts[:200], k=2)
         prompt = f"""[体調]
 - 体力 {int(self.state.energy)}/100 ({_describe("energy", self.state.energy)})
 - 空腹 {int(self.state.hunger)}/100 ({_describe("hunger", self.state.hunger)})
@@ -354,11 +473,18 @@ class ConsciousVitalOS(VitalOS):
 [最近]
 {recent_str}
 
+[記憶]
+{mem_ctx}
+
 ユーザーからのメッセージ:
 {msg_texts}{max_wait}
 
-返事を書いて。短文で、自然な日本語で。返事だけ。"""
-        return self._call_llm(prompt) or ""
+返事を書いて。堅苦しくなく、友達に話すように。短文で。返事だけ。"""
+        reply = self._call_llm(prompt) or ""
+        if reply:
+            self.memory.add(f"ユーザーの「{msg_texts[:80]}」に返信: {reply[:200]}",
+                            activity_type="reply", importance=4)
+        return reply
 
     def _llm_decide(self) -> tuple[str, int]:
         candidates = self._all_choices()
@@ -387,6 +513,7 @@ class ConsciousVitalOS(VitalOS):
             read_s = "既読" if last.read_by_recipient else "未読"
             phone_context = f"📱 最後のメッセージ({wait_min}分前) → {read_s}"
 
+        mem_ctx = self.memory.context(recent_str, k=3)
         prompt = CHOICE_PROMPT.format(
             time=self.time.strftime("%H:%M"),
             energy=int(self.state.energy),
@@ -402,6 +529,7 @@ class ConsciousVitalOS(VitalOS):
             room_desc=f"{loc['name_ja']} — {loc['desc']}（隣: {adj_desc}）",
             recent=recent_str,
             phone_context=phone_context,
+            memory_context=mem_ctx,
             simple_choices=self._simple_choices_str(),
         )
 
@@ -465,16 +593,20 @@ class ConsciousVitalOS(VitalOS):
     def monologue(self) -> str:
         recent = self.history[-3:] if self.history else []
         recent_str = "; ".join(f"{e.time}:{e.activity}" for e in recent) or "nothing"
-        prompt = MONOLOGUE_PROMPT.format(recent=recent_str)
+        mem_ctx = self.memory.context("今の気持ち", k=2)
+        prompt = MONOLOGUE_PROMPT.format(recent=recent_str, memory_context=mem_ctx)
         thought = self._call_llm(prompt)
         if thought:
             first_line = thought.split("\n")[0].strip()
-            return first_line[:120] if len(first_line) > 120 else first_line
+            result = first_line[:120] if len(first_line) > 120 else first_line
+            if result:
+                self.memory.add(result, activity_type="thought", importance=2)
+            return result
         return ""
 
 
 def simulate_living(model: str = "deepseek-v4-flash-free", tick_minutes: int = 15, resume: bool = False,
-                    monologue_interval: int = 4, daemon: bool = False):
+                    monologue_interval: int = 4, daemon: bool = False, realtime: bool = False):
     os = ConsciousVitalOS(model=model)
     if resume and os.load():
         if not daemon:
@@ -483,6 +615,20 @@ def simulate_living(model: str = "deepseek-v4-flash-free", tick_minutes: int = 1
         if not daemon:
             print(f"Monica: 新しい生活を始める (LLM:{model})\n")
 
+    import signal
+    _exiting = False
+    def _save_and_exit(sig, frame):
+        nonlocal _exiting
+        if _exiting:
+            sys.exit(1)
+        _exiting = True
+        os.save()
+        if not daemon:
+            print("\nMonica: 状態を保存しました。またね！")
+        sys.exit(0)
+    signal.signal(signal.SIGINT, _save_and_exit)
+    signal.signal(signal.SIGTERM, _save_and_exit)
+
     ticks_since_monologue = 0
     last_day = os.time.day
     save_interval_ticks = 96
@@ -490,6 +636,7 @@ def simulate_living(model: str = "deepseek-v4-flash-free", tick_minutes: int = 1
     os._pending_reply_from = []
 
     while True:
+        _tick_start = time.monotonic()
         if not os.current_activity:
             action, duration = os.decide_next()
             if not daemon:
@@ -521,12 +668,20 @@ def simulate_living(model: str = "deepseek-v4-flash-free", tick_minutes: int = 1
             os.save()
             save_interval_ticks = 96
 
+        if realtime:
+            elapsed = time.monotonic() - _tick_start
+            wait = max(0, tick_minutes * 60 - elapsed)
+            if wait > 0 and not daemon:
+                print(f"  ({int(wait)}秒待機)")
+            time.sleep(wait)
+
 
 if __name__ == "__main__":
     import sys
     model = os.environ.get("MONIKA_MODEL", "deepseek-v4-flash-free")
     resume = "--resume" in sys.argv
     daemon = "--daemon" in sys.argv
+    realtime = "--realtime" in sys.argv
     if "--model" in sys.argv:
         i = sys.argv.index("--model")
         if i + 1 < len(sys.argv):
@@ -535,4 +690,4 @@ if __name__ == "__main__":
         print("OPENCODE_ZEN_API_KEY が設定されていません")
         print("  export OPENCODE_ZEN_API_KEY=sk-...")
         sys.exit(1)
-    simulate_living(model=model, resume=resume, daemon=daemon)
+    simulate_living(model=model, resume=resume, daemon=daemon, realtime=realtime)
