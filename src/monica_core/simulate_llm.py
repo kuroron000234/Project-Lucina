@@ -587,9 +587,6 @@ class ConsciousVitalOS(VitalOS):
             self.day_log.append(f"[{self.time.strftime('%H:%M')}] …何しようかな（考え中）")
             return ("idle", 30)
 
-    def start_activity(self, activity_name: str, duration: int | None = None):
-        super().start_activity(activity_name, duration)
-
     def monologue(self) -> str:
         recent = self.history[-3:] if self.history else []
         recent_str = "; ".join(f"{e.time}:{e.activity}" for e in recent) or "nothing"
@@ -616,6 +613,7 @@ def simulate_living(model: str = "deepseek-v4-flash-free", tick_minutes: int = 1
             print(f"Monica: 新しい生活を始める (LLM:{model})\n")
 
     import signal
+    import time as _time
     _exiting = False
     def _save_and_exit(sig, frame):
         nonlocal _exiting
@@ -636,7 +634,7 @@ def simulate_living(model: str = "deepseek-v4-flash-free", tick_minutes: int = 1
     os._pending_reply_from = []
 
     while True:
-        _tick_start = time.monotonic()
+        _tick_start = _time.monotonic()
         if not os.current_activity:
             action, duration = os.decide_next()
             if not daemon:
@@ -669,11 +667,11 @@ def simulate_living(model: str = "deepseek-v4-flash-free", tick_minutes: int = 1
             save_interval_ticks = 96
 
         if realtime:
-            elapsed = time.monotonic() - _tick_start
+            elapsed = _time.monotonic() - _tick_start
             wait = max(0, tick_minutes * 60 - elapsed)
             if wait > 0 and not daemon:
                 print(f"  ({int(wait)}秒待機)")
-            time.sleep(wait)
+            _time.sleep(wait)
 
 
 if __name__ == "__main__":
