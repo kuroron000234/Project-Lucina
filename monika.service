@@ -1,0 +1,16 @@
+[Unit]
+Description=Monika VitalOS
+After=network.target
+
+[Service]
+Type=simple
+User=koushi
+WorkingDirectory=/home/koushi/lucina
+EnvironmentFile=/home/koushi/lucina/.env
+Environment=PYTHONPATH=/home/koushi/lucina/src
+ExecStart=/usr/bin/python3 -m monica_core.simulate_llm --resume --realtime --daemon
+Restart=on-failure
+RestartSec=30
+
+[Install]
+WantedBy=multi-user.target

@@ -27,10 +27,9 @@ if _env_path.exists():
 
 sys.path.insert(0, str(SRC))
 from monica_core.vital_os import LOCATIONS
+from monica_core.llm_client import get_api_config, call_llm
 
-ZEN_API_KEY = os.environ.get("OPENCODE_ZEN_API_KEY", "")
-ZEN_MODEL = os.environ.get("MONIKA_MODEL", "deepseek-v4-flash-free")
-ZEN_BASE = "https://opencode.ai/zen/v1"
+ZEN_API_KEY, ZEN_BASE, ZEN_MODEL = get_api_config()
 
 app = flask.Flask(__name__)
 
@@ -63,28 +62,7 @@ def _load_json(path: Path):
 
 
 def _call_llm(prompt: str, max_retries: int = 1) -> str | None:
-    import urllib.request
-    data = json.dumps({
-        "model": ZEN_MODEL,
-        "messages": [{"role": "user", "content": prompt}],
-        "max_tokens": 200,
-        "temperature": 0.8,
-    }).encode()
-    req = urllib.request.Request(
-        f"{ZEN_BASE}/chat/completions", data=data,
-        headers={
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {ZEN_API_KEY}",
-        },
-    )
-    for _ in range(max_retries + 1):
-        try:
-            with urllib.request.urlopen(req, timeout=30) as resp:
-                body = json.loads(resp.read())
-                return body["choices"][0]["message"]["content"].strip()
-        except Exception:
-            time.sleep(1)
-    return None
+    return call_llm(prompt, max_tokens=200, temperature=0.8, max_retries=max_retries)
 
 
 def _get_state() -> dict:

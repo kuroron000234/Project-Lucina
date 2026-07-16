@@ -2,7 +2,9 @@ import ast
 import importlib.resources  # Python 3.14 compat
 import json
 import os
+import time
 import urllib.request
+import urllib.error
 from datetime import datetime
 from pathlib import Path
 
@@ -23,9 +25,9 @@ from .vital_os import (
 )
 from .memory import Memory
 from .readers import ReadingHandler
+from .llm_client import get_api_config, call_llm
 
-ZEN_API_KEY = os.environ.get("OPENCODE_ZEN_API_KEY", "")
-ZEN_BASE = "https://opencode.ai/zen/v1"
+ZEN_API_KEY, ZEN_BASE, _ = get_api_config()
 
 
 def _zen_chat(model: str, messages: list) -> dict:
@@ -34,16 +36,28 @@ def _zen_chat(model: str, messages: list) -> dict:
         "messages": messages,
         "stream": False,
     }).encode()
-    req = urllib.request.Request(
-        f"{ZEN_BASE}/chat/completions", data=data,
-        headers={
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {ZEN_API_KEY}",
-            "User-Agent": "Monica/1.0",
-        },
-    )
-    resp = urllib.request.urlopen(req, timeout=120)
-    return json.loads(resp.read())
+    last_err = None
+    for _ in range(3):
+        req = urllib.request.Request(
+            f"{ZEN_BASE}/chat/completions", data=data,
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {ZEN_API_KEY}",
+                "User-Agent": "Monica/1.0",
+            },
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=60) as resp:
+                return json.loads(resp.read())
+        except urllib.error.HTTPError as e:
+            last_err = e
+            if e.code == 429:
+                time.sleep(3)
+                continue
+        except Exception as e:
+            last_err = e
+            time.sleep(1)
+    raise last_err or RuntimeError("LLM request failed")
 
 
 DESC = {
