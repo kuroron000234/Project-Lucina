@@ -664,6 +664,7 @@ def simulate_living(model: str = "deepseek-v4-flash-free", tick_minutes: int = 1
     ticks_since_monologue = 0
     last_day = os.time.day
     save_interval_ticks = 1 if realtime else 96
+    auto_phone_counter = 0
     os._pending_message = ""
     os._pending_reply_from = []
 
@@ -683,8 +684,11 @@ def simulate_living(model: str = "deepseek-v4-flash-free", tick_minutes: int = 1
 
         os.tick(tick_minutes, advance_clock=not realtime)
 
-        if not daemon and hasattr(os, '_check_phone'):
-            os._check_phone()
+        auto_phone_counter += 1
+        if auto_phone_counter >= 3:  # 15分に1回（5分tick時）
+            if hasattr(os, '_check_phone'):
+                os._check_phone()
+            auto_phone_counter = 0
 
         if os.time.day != last_day:
             if not daemon:
