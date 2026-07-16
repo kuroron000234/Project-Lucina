@@ -614,6 +614,8 @@ class ConsciousVitalOS(VitalOS):
 
 def simulate_living(model: str = "deepseek-v4-flash-free", tick_minutes: int = 15, resume: bool = False,
                     monologue_interval: int = 4, daemon: bool = False, realtime: bool = False):
+    if realtime:
+        tick_minutes = 5
     os = ConsciousVitalOS(model=model)
     resumed = resume and os.load()
     if resumed:
@@ -661,7 +663,7 @@ def simulate_living(model: str = "deepseek-v4-flash-free", tick_minutes: int = 1
 
     ticks_since_monologue = 0
     last_day = os.time.day
-    save_interval_ticks = 96
+    save_interval_ticks = 1 if realtime else 96
     os._pending_message = ""
     os._pending_reply_from = []
 
