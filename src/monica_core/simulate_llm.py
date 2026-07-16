@@ -3,6 +3,7 @@ import importlib.resources  # Python 3.14 compat
 import json
 import os
 import urllib.request
+from datetime import datetime
 from pathlib import Path
 
 _env_path = Path(__file__).resolve().parents[2] / ".env"
@@ -688,7 +689,7 @@ def simulate_living(model: str = "deepseek-v4-flash-free", tick_minutes: int = 1
         save_interval_ticks -= 1
         if save_interval_ticks <= 0:
             os.save()
-            save_interval_ticks = 96
+            save_interval_ticks = 4 if realtime else 96
 
         if realtime:
             _time.sleep(tick_minutes * 60)
