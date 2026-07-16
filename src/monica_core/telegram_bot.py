@@ -78,15 +78,24 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     s = state.get("state", {})
     room = state.get("current_room", "?")
     activity = state.get("current_activity") or "何もしてない"
+    sim_time = state.get("time", "?")[11:16] if len(state.get("time", "")) > 16 else "?"
+    history = state.get("history", [])
+    last_acts = history[-5:] if history else []
+    memory = _load_json(MSG_PATH.parent / "memory_store.json")
+    mem_count = len(memory) if isinstance(memory, list) else len(memory.get("entries", [])) if isinstance(memory, dict) else 0
     lines = [
+        f"🕐 {sim_time}",
         f"📍 {room}",
         f"📖 {activity}",
-        f"⚡ 体力 {s.get('energy', '?'):.0f}/100",
-        f"🍽️ 空腹 {s.get('hunger', '?'):.0f}/100",
-        f"😴 疲労 {s.get('fatigue', '?'):.0f}/100",
-        f"💔 孤独 {s.get('loneliness', '?'):.0f}/100",
-        f"😊 気分 {s.get('spirit', '?'):.0f}/100",
+        f"⚡ {s.get('energy', '?'):.0f} 🍽️ {s.get('hunger', '?'):.0f} 😴 {s.get('fatigue', '?'):.0f}",
+        f"💔 {s.get('loneliness', '?'):.0f} 😊 {s.get('spirit', '?'):.0f}",
+        f"🧠 {mem_count}件の記憶",
     ]
+    if last_acts:
+        lines.append("")
+        lines.append("直近の行動:")
+        for e in last_acts:
+            lines.append(f"  [{e.get('time','?')}] {e.get('activity','?')}")
     await update.message.reply_text("📊 モニカの状態\n\n" + "\n".join(lines))
 
 

@@ -325,6 +325,7 @@ class VitalOS:
                 name: t.isoformat() if t else None
                 for name, t in self.model.last_done_time.items()
             },
+            "day_log": self.day_log[-100:],
             "phone": {
                 "consecutive_empty_checks": self.phone.consecutive_empty_checks,
                 "last_outgoing_time": self.phone.last_outgoing_time,
@@ -358,6 +359,7 @@ class VitalOS:
                 self.model.last_done_time[name] = (
                     datetime.fromisoformat(t_str) if t_str else None
                 )
+            self.day_log = data.get("day_log", [])
             phone_data = data.get("phone", {})
             self.phone.consecutive_empty_checks = phone_data.get("consecutive_empty_checks", 0)
             self.phone.last_outgoing_time = phone_data.get("last_outgoing_time", "")
