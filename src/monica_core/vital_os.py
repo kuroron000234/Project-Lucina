@@ -366,8 +366,9 @@ class VitalOS:
         except Exception:
             return False
 
-    def tick(self, minutes: int = 5):
-        self.time += timedelta(minutes=minutes)
+    def tick(self, minutes: int = 5, advance_clock: bool = True):
+        if advance_clock:
+            self.time += timedelta(minutes=minutes)
         self._apply_drift(minutes)
         if self.current_activity:
             was_remaining = self.activity_remaining

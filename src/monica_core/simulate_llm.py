@@ -605,7 +605,8 @@ class ConsciousVitalOS(VitalOS):
 def simulate_living(model: str = "deepseek-v4-flash-free", tick_minutes: int = 15, resume: bool = False,
                     monologue_interval: int = 4, daemon: bool = False, realtime: bool = False):
     os = ConsciousVitalOS(model=model)
-    if resume and os.load():
+    resumed = resume and os.load()
+    if resumed:
         if not daemon:
             print(f"Monica: 再開 (LLM:{model})\n")
     else:
@@ -614,6 +615,27 @@ def simulate_living(model: str = "deepseek-v4-flash-free", tick_minutes: int = 1
 
     import signal
     import time as _time
+
+    if realtime:
+        now = datetime.now()
+        if resumed:
+            saved = os.time
+            gap_hours = (now - saved).total_seconds() / 3600
+            if gap_hours > tick_minutes / 60:
+                catchup_ticks = int(gap_hours * 60 / tick_minutes)
+                if not daemon:
+                    print(f"⏱ {gap_hours:.1f}時間のギャップを調整 ({catchup_ticks} ticks)")
+                for _ in range(catchup_ticks):
+                    os._apply_drift(tick_minutes)
+                    if os.current_activity:
+                        os.activity_remaining -= tick_minutes
+                        os._apply_activity_effects(os.current_activity, tick_minutes)
+                        if os.activity_remaining <= 0:
+                            os._finish_activity()
+                    os.state.clamp()
+                os.day_log.append(f"[⌛] 時間同期: {gap_hours:.1f}時間ぶんの状態を反映")
+        os.time = now
+
     _exiting = False
     def _save_and_exit(sig, frame):
         nonlocal _exiting
@@ -634,7 +656,9 @@ def simulate_living(model: str = "deepseek-v4-flash-free", tick_minutes: int = 1
     os._pending_reply_from = []
 
     while True:
-        _tick_start = _time.monotonic()
+        if realtime:
+            os.time = datetime.now()
+
         if not os.current_activity:
             action, duration = os.decide_next()
             if not daemon:
@@ -645,7 +669,7 @@ def simulate_living(model: str = "deepseek-v4-flash-free", tick_minutes: int = 1
                 print(f"[{os.time.strftime('%m/%d %H:%M')}] decide: {action} ({duration}分){extra}")
             os.start_activity(action, duration)
 
-        os.tick(tick_minutes)
+        os.tick(tick_minutes, advance_clock=not realtime)
 
         if os.time.day != last_day:
             if not daemon:
@@ -667,11 +691,7 @@ def simulate_living(model: str = "deepseek-v4-flash-free", tick_minutes: int = 1
             save_interval_ticks = 96
 
         if realtime:
-            elapsed = _time.monotonic() - _tick_start
-            wait = max(0, tick_minutes * 60 - elapsed)
-            if wait > 0 and not daemon:
-                print(f"  ({int(wait)}秒待機)")
-            _time.sleep(wait)
+            _time.sleep(tick_minutes * 60)
 
 
 if __name__ == "__main__":
