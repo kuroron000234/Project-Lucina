@@ -6,6 +6,15 @@ import time
 from datetime import datetime
 from pathlib import Path
 
+_env_path = Path(__file__).resolve().parents[2] / ".env"
+if _env_path.exists():
+    for _line in _env_path.read_text().splitlines():
+        _line = _line.strip()
+        if _line and not _line.startswith("#") and "=" in _line:
+            _k, _v = _line.split("=", 1)
+            if _k.strip() not in os.environ:
+                os.environ[_k.strip()] = _v.strip()
+
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 
