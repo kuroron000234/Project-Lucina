@@ -1,9 +1,16 @@
+"""
+モニカのスマホ — 非同期メッセージストア
+
+SQLite バックエンド（storage.py）を使用。
+既存のJSONファイルからの自動移行に対応。
+"""
+
 import json
-from dataclasses import dataclass, field
+import logging
+from dataclasses import dataclass
 from pathlib import Path
 
-
-STORE_PATH = Path(__file__).resolve().parents[2] / "data" / "phone_messages.json"
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -14,14 +21,61 @@ class PhoneMessage:
     read_by_recipient: bool = False
 
 
+# JSON フォールバック用
+STORE_PATH = Path(__file__).resolve().parents[2] / "data" / "phone_messages.json"
+
+
 def load() -> list[PhoneMessage]:
+    """メッセージ一覧を読み込み（SQLite優先、フォールバックJSON）"""
+    try:
+        from .storage import phone_load
+        msgs = phone_load()
+        if msgs:
+            return [
+                PhoneMessage(
+                    sender=m["sender"],
+                    text=m["text"],
+                    timestamp=m["timestamp"],
+                    read_by_recipient=m.get("read_by_recipient", False),
+                )
+                for m in msgs
+            ]
+    except Exception as e:
+        logger.debug(f"SQLite phone_load failed, falling back to JSON: {e}")
+
+    # JSON フォールバック
+    return _load_json_fallback()
+
+
+def _load_json_fallback() -> list[PhoneMessage]:
     if not STORE_PATH.exists():
         return []
-    data = json.loads(STORE_PATH.read_text(encoding="utf-8"))
-    return [PhoneMessage(**m) for m in data]
+    try:
+        data = json.loads(STORE_PATH.read_text(encoding="utf-8"))
+        return [PhoneMessage(**m) for m in data]
+    except Exception:
+        return []
 
 
 def save(messages: list[PhoneMessage]):
+    """メッセージ一覧を保存（SQLite優先）"""
+    try:
+        from .storage import phone_save
+        data = [
+            {"sender": m.sender, "text": m.text,
+             "timestamp": m.timestamp, "read_by_recipient": m.read_by_recipient}
+            for m in messages
+        ]
+        phone_save(data)
+        return
+    except Exception as e:
+        logger.debug(f"SQLite phone_save failed, falling back to JSON: {e}")
+
+    # JSON フォールバック
+    _save_json_fallback(messages)
+
+
+def _save_json_fallback(messages: list[PhoneMessage]):
     STORE_PATH.parent.mkdir(parents=True, exist_ok=True)
     data = [
         {"sender": m.sender, "text": m.text,
@@ -34,12 +88,37 @@ def save(messages: list[PhoneMessage]):
 
 
 def add(sender: str, text: str, timestamp: str) -> PhoneMessage:
-    msgs = load()
+    """メッセージを追加"""
     msg = PhoneMessage(sender=sender, text=text,
                        timestamp=timestamp, read_by_recipient=False)
+
+    try:
+        from .storage import phone_add as storage_add
+        storage_add(sender, text, timestamp)
+        return msg
+    except Exception as e:
+        logger.debug(f"SQLite phone_add failed, falling back to JSON: {e}")
+
+    # JSON フォールバック
+    msgs = _load_json_fallback()
     msgs.append(msg)
-    save(msgs)
+    _save_json_fallback(msgs)
     return msg
+
+
+def mark_read(sender: str = "monika"):
+    """特定送信者のメッセージを既読に"""
+    try:
+        from .storage import phone_mark_read
+        phone_mark_read(sender)
+    except Exception as e:
+        logger.debug(f"SQLite phone_mark_read failed: {e}")
+        # JSON fallback
+        msgs = _load_json_fallback()
+        for m in msgs:
+            if m.sender == sender:
+                m.read_by_recipient = True
+        _save_json_fallback(msgs)
 
 
 def get_sent_since(messages: list[PhoneMessage], sender: str,

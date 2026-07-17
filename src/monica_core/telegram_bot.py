@@ -18,25 +18,15 @@ if _env_path.exists():
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 
+from .phone import PhoneMessage, add as phone_add, load as phone_load, mark_read as phone_mark_read
+
 DATA_DIR = Path(__file__).resolve().parents[2] / "data"
-MSG_PATH = DATA_DIR / "phone_messages.json"
 STATE_PATH = DATA_DIR / "state.json"
 
 BOT_TOKEN = os.environ.get("MONIKA_TELEGRAM_TOKEN", "")
 ALLOWED_USERS = {int(u) for u in os.environ.get("MONIKA_TELEGRAM_USERS", "").split(",") if u}
 
 _last_monika_ts: dict[int, str] = {}
-
-
-def _load_messages() -> list[dict]:
-    if not MSG_PATH.exists():
-        return []
-    return json.loads(MSG_PATH.read_text(encoding="utf-8"))
-
-
-def _save_messages(msgs: list[dict]):
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
-    MSG_PATH.write_text(json.dumps(msgs, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 def _load_state() -> dict | None:
@@ -107,57 +97,28 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     now = datetime.now().isoformat()
-    msgs = _load_messages()
 
-    # Mark all previous Monika messages as read (user opened the chat)
-    for m in msgs:
-        if m["sender"] == "monika":
-            m["read_by_recipient"] = True
+    # モニカからのメッセージを既読に
+    phone_mark_read("monika")
 
-    # Add user message
-    msgs.append({
-        "sender": "user",
-        "text": text,
-        "timestamp": now,
-        "read_by_recipient": False,
-    })
-    _save_messages(msgs)
-
-
-def check_new_monika_messages(bot, chat_id: int):
-    """Push new Monika messages to Telegram. Called from polling loop."""
-    msgs = _load_messages()
-    monika_msgs = [m for m in msgs if m["sender"] == "monika"]
-    if not monika_msgs:
-        return
-
-    last_ts = monika_msgs[-1]["timestamp"]
-    seen = _last_monika_ts.get(chat_id, "")
-
-    if last_ts > seen:
-        new = [m for m in monika_msgs if m["timestamp"] > seen]
-        for m in new:
-            try:
-                bot.send_message(chat_id=chat_id, text=m["text"][:500])
-            except Exception:
-                pass
-        _last_monika_ts[chat_id] = last_ts
+    # phone.add 経由でユーザーメッセージを追加
+    phone_add("user", text, now)
 
 
 async def push_monika_messages(context: ContextTypes.DEFAULT_TYPE):
     """Periodically push new Monika messages to Telegram."""
     for chat_id in ALLOWED_USERS:
         try:
-            msgs = _load_messages()
-            monika_msgs = [m for m in msgs if m["sender"] == "monika"]
+            msgs = phone_load()
+            monika_msgs = [m for m in msgs if m.sender == "monika"]
             if not monika_msgs:
                 continue
-            last_ts = monika_msgs[-1]["timestamp"]
+            last_ts = monika_msgs[-1].timestamp
             seen = _last_monika_ts.get(chat_id, "")
             if last_ts > seen:
                 for m in monika_msgs:
-                    if m["timestamp"] > seen:
-                        await context.bot.send_message(chat_id=chat_id, text=m["text"][:500])
+                    if m.timestamp > seen:
+                        await context.bot.send_message(chat_id=chat_id, text=m.text[:500])
                 _last_monika_ts[chat_id] = last_ts
         except Exception:
             pass

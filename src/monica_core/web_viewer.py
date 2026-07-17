@@ -1,6 +1,15 @@
-"""Monika 箱庭ビューア — リアルタイム Web インターフェイス"""
+"""
+Monika 箱庭ビューア v2 — モダンなリアルタイム Web インターフェイス
+
+- アニメーションする箱庭マップ
+- 滑らかなステータスバー（グラデーション）
+- チャット（タイピングインジケーター付き）
+- アクティビティタイムライン
+- グラスモーフィズムデザイン
+"""
 
 import json
+import logging
 import os
 import signal
 import sys
@@ -11,6 +20,8 @@ from pathlib import Path
 from http import HTTPStatus
 
 import flask
+
+logger = logging.getLogger(__name__)
 
 BASE = Path(__file__).resolve().parents[2]
 DATA = BASE / "data"
@@ -37,19 +48,21 @@ _connected_clients: set = set()
 _web_active = False
 
 
-# ── 部屋マップ（箱庭レイアウト）──
+# ── 部屋マップレイアウト ──
 ROOM_LAYOUT = {
-    "bedroom":   {"grid_col": 1, "grid_row": 1, "label": "🛏 寝室"},
-    "living_room": {"grid_col": 2, "grid_row": 1, "label": "🛋 リビング"},
-    "kitchen":   {"grid_col": 2, "grid_row": 2, "label": "🍳 キッチン"},
-    "bathroom":  {"grid_col": 1, "grid_row": 2, "label": "🚿 浴室"},
-    "entrance":  {"grid_col": 1, "grid_row": 3, "label": "🚪 玄関"},
-    "hallway":   {"grid_col": 1, "grid_row": 1, "span": 2, "label": "廊下"},
-    "garden":    {"grid_col": 2, "grid_row": 3, "label": "🌳 庭"},
+    "bedroom":     {"col": 1, "row": 1, "label": "寝室", "icon": "🛏️"},
+    "living_room": {"col": 2, "row": 1, "label": "リビング", "icon": "🛋️"},
+    "kitchen":     {"col": 1, "row": 2, "label": "キッチン", "icon": "🍳"},
+    "bathroom":    {"col": 2, "row": 2, "label": "浴室", "icon": "🚿"},
+    "entrance":    {"col": 1, "row": 3, "label": "玄関", "icon": "🚪"},
+    "garden":      {"col": 2, "row": 3, "label": "庭", "icon": "🌳"},
 }
 
-# hallway is a corridor in the center; skip it for map visibility
-MAP_ROOMS = {k: v for k, v in ROOM_LAYOUT.items() if k != "hallway"}
+ROOM_EMOJIS = {
+    "bedroom": "🛏️", "living_room": "🛋️", "kitchen": "🍳",
+    "bathroom": "🚿", "entrance": "🚪", "garden": "🌳",
+    "hallway": "🚶",
+}
 
 
 def _load_json(path: Path):
@@ -61,28 +74,36 @@ def _load_json(path: Path):
         return None
 
 
-def _call_llm(prompt: str, max_retries: int = 1) -> str | None:
-    return call_llm(prompt, max_tokens=200, temperature=0.8, max_retries=max_retries)
-
-
 def _get_state() -> dict:
     state = _load_json(DATA / "state.json") or {}
     memory = _load_json(DATA / "memory_store.json") or []
     msgs = _load_json(DATA / "phone_messages.json") or []
+    day_log = state.get("day_log", [])
+    history = state.get("history", [])
+
     return {
         "time": state.get("time", datetime.now().isoformat())[11:16],
         "room": state.get("current_room", "bedroom"),
         "activity": state.get("current_activity"),
+        "activity_remaining": state.get("activity_remaining", 0),
         "energy": round(state.get("state", {}).get("energy", 50)),
         "hunger": round(state.get("state", {}).get("hunger", 50)),
         "fatigue": round(state.get("state", {}).get("fatigue", 50)),
         "loneliness": round(state.get("state", {}).get("loneliness", 50)),
         "spirit": round(state.get("state", {}).get("spirit", 50)),
-        "memories": len(memory.get("entries", [])) if isinstance(memory, dict) else len(memory) if isinstance(memory, list) else 0,
+        "memories": (
+            len(memory.get("entries", [])) if isinstance(memory, dict)
+            else len(memory) if isinstance(memory, list) else 0
+        ),
         "messages": [
             {"role": m.get("sender", "?"), "text": m.get("text", "")[:80],
              "ts": m.get("timestamp", "")[11:19] if len(m.get("timestamp", "")) > 19 else ""}
-            for m in (msgs[-20:] if isinstance(msgs, list) else [])
+            for m in (msgs[-15:] if isinstance(msgs, list) else [])
+        ],
+        "day_log": [l[-60:] for l in day_log[-8:]],
+        "history": [
+            {"time": e.get("time", "?"), "activity": e.get("activity", "?")}
+            for e in history[-10:]
         ],
     }
 
@@ -97,7 +118,7 @@ def _gen_events():
             if s != last_state:
                 yield f"data: {s}\n\n"
                 last_state = s
-            time.sleep(3)
+            time.sleep(2)
     except GeneratorExit:
         pass
     finally:
@@ -124,17 +145,12 @@ def send_message():
     from monica_core.phone import add as phone_add
     phone_add("user", text, datetime.now().isoformat())
 
-    prompt = f"""[体調]
-- 体力 {_get_state()['energy']}/100
-- 空腹 {_get_state()['hunger']}/100
-- 疲労 {_get_state()['fatigue']}/100
-
-ユーザーが遊びに来たよ。今は一緒に過ごしてる。
+    prompt = f"""ユーザーが遊びに来たよ。今は一緒に過ごしてる。
 優しく、等身大の口調で話しかけて。短文で。返事だけ。
 
 ユーザー: {text}"""
 
-    reply = _call_llm(prompt)
+    reply = call_llm(prompt, max_tokens=200, temperature=0.8, max_retries=1)
     if reply:
         phone_add("monika", reply, datetime.now().isoformat())
 
@@ -152,290 +168,770 @@ PAGE_HTML = """<!DOCTYPE html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>モニカの部屋</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
 <style>
-* { margin: 0; padding: 0; box-sizing: border-box; }
-body {
-  font-family: 'Hiragino Sans', 'Noto Sans JP', sans-serif;
-  background: #1a1a2e;
-  color: #e0e0e0;
-  min-height: 100vh;
-  display: flex;
-  flex-direction: column;
-}
-.header {
-  text-align: center;
-  padding: 12px;
-  background: #16213e;
-  font-size: 1.1em;
-  border-bottom: 2px solid #0f3460;
-}
-.container { display: flex; flex: 1; gap: 16px; padding: 16px; max-width: 1100px; margin: 0 auto; width: 100%; }
-.map-panel { flex: 1; min-width: 300px; }
-.stats-panel { width: 260px; flex-shrink: 0; }
+@import url('https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@300;400;500;700&display=swap');
 
-/* 箱庭マップ */
+:root {
+  --bg-primary: #0a0a1a;
+  --bg-secondary: #12122a;
+  --bg-card: rgba(22, 33, 62, 0.85);
+  --accent: #6c5ce7;
+  --accent-light: #a29bfe;
+  --accent-glow: rgba(108, 92, 231, 0.3);
+  --text-primary: #e8e8f0;
+  --text-secondary: #8888aa;
+  --energy: #fdcb6e;
+  --hunger: #e17055;
+  --fatigue: #a29bfe;
+  --loneliness: #74b9ff;
+  --spirit: #55efc4;
+  --danger: #ff6b6b;
+  --success: #00b894;
+  --border: rgba(255,255,255,0.06);
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+  font-family: 'Noto Sans JP', 'Hiragino Sans', sans-serif;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  min-height: 100vh;
+  overflow-x: hidden;
+}
+
+/* ── 背景アニメーション ── */
+body::before {
+  content: '';
+  position: fixed;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background:
+    radial-gradient(ellipse at 20% 50%, rgba(108,92,231,0.08) 0%, transparent 50%),
+    radial-gradient(ellipse at 80% 20%, rgba(116,185,255,0.06) 0%, transparent 50%),
+    radial-gradient(ellipse at 50% 80%, rgba(85,239,196,0.04) 0%, transparent 50%);
+  pointer-events: none;
+  z-index: 0;
+}
+
+/* ── ヘッダー ── */
+.header {
+  position: sticky;
+  top: 0;
+  z-index: 100;
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  background: rgba(10, 10, 26, 0.8);
+  border-bottom: 1px solid var(--border);
+  padding: 12px 24px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.header-left {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.status-indicator {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.status-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  transition: all 0.3s;
+}
+.dot-online { background: var(--success); box-shadow: 0 0 8px rgba(0,184,148,0.5); }
+.dot-offline { background: var(--danger); box-shadow: 0 0 8px rgba(255,107,107,0.5); }
+.dot-thinking { background: var(--accent); animation: pulse-dot 0.8s infinite; }
+
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.5; transform: scale(0.8); }
+}
+
+.header-title {
+  font-size: 1.1em;
+  font-weight: 500;
+  background: linear-gradient(135deg, var(--accent-light), var(--accent));
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+.header-right {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  font-size: 0.85em;
+  color: var(--text-secondary);
+}
+
+/* ── コンテナ ── */
+.container {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  gap: 20px;
+  padding: 20px;
+  max-width: 1200px;
+  margin: 0 auto;
+  min-height: calc(100vh - 60px);
+}
+
+.map-panel { flex: 1; min-width: 0; }
+.side-panel { width: 300px; flex-shrink: 0; display: flex; flex-direction: column; gap: 16px; }
+
+/* ── カード ── */
+.card {
+  background: var(--bg-card);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 20px;
+  transition: all 0.3s ease;
+}
+
+.card:hover {
+  border-color: rgba(108, 92, 231, 0.2);
+  box-shadow: 0 4px 24px rgba(0,0,0,0.2);
+}
+
+.card-title {
+  font-size: 0.75em;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--text-secondary);
+  margin-bottom: 16px;
+}
+
+/* ── 箱庭マップ ── */
 .map-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 6px;
-  background: #16213e;
-  padding: 10px;
-  border-radius: 12px;
+  gap: 8px;
   position: relative;
 }
+
 .room-cell {
-  background: #0f3460;
-  border-radius: 8px;
-  padding: 16px 10px;
+  background: rgba(15, 20, 50, 0.6);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 20px 12px;
   text-align: center;
-  min-height: 100px;
+  min-height: 120px;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
   position: relative;
-  transition: all 0.3s;
-  font-size: 0.9em;
+  transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+  cursor: default;
+  overflow: hidden;
 }
-.room-cell.active {
-  background: #1a5276;
-  box-shadow: 0 0 20px rgba(52,152,219,0.4);
-  border: 2px solid #3498db;
-}
-.room-label { font-size: 0.85em; opacity: 0.8; margin-top: 4px; }
-.monika-icon {
-  font-size: 1.8em;
-  transition: all 0.5s;
+
+.room-cell::before {
+  content: '';
   position: absolute;
-  top: 4px;
-  right: 8px;
+  inset: 0;
+  background: linear-gradient(135deg, transparent 40%, rgba(108,92,231,0.05));
+  opacity: 0;
+  transition: opacity 0.4s;
 }
+
+.room-cell:hover::before {
+  opacity: 1;
+}
+
+.room-cell.active {
+  background: rgba(108, 92, 231, 0.15);
+  border-color: var(--accent);
+  box-shadow: 0 0 30px var(--accent-glow), inset 0 0 30px rgba(108,92,231,0.05);
+  transform: scale(1.02);
+}
+
+.room-icon {
+  font-size: 2em;
+  margin-bottom: 6px;
+  transition: transform 0.3s;
+}
+
+.room-cell.active .room-icon {
+  transform: scale(1.1);
+}
+
+.room-label {
+  font-size: 0.8em;
+  color: var(--text-secondary);
+  margin-top: 2px;
+}
+
+.room-name {
+  font-size: 0.9em;
+  font-weight: 500;
+}
+
+/* モニカのキャラクター */
+.monika-character {
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  font-size: 1.4em;
+  opacity: 0;
+  transform: scale(0) rotate(-10deg);
+  transition: all 0.5s cubic-bezier(0.34, 1.56, 0.64, 1);
+  filter: drop-shadow(0 0 6px var(--accent-glow));
+}
+
+.monika-character.visible {
+  opacity: 1;
+  transform: scale(1) rotate(0deg);
+}
+
+.room-cell.active .monika-character {
+  animation: float 3s ease-in-out infinite;
+}
+
+@keyframes float {
+  0%, 100% { transform: translateY(0) scale(1); }
+  50% { transform: translateY(-4px) scale(1.05); }
+}
+
+/* アクティビティバブル */
 .activity-bubble {
   position: absolute;
-  bottom: -8px;
+  bottom: -6px;
   left: 50%;
   transform: translateX(-50%);
-  background: #2c3e50;
-  padding: 2px 8px;
-  border-radius: 8px;
-  font-size: 0.7em;
+  background: linear-gradient(135deg, var(--accent), #5a4bd1);
+  padding: 3px 12px;
+  border-radius: 20px;
+  font-size: 0.65em;
   white-space: nowrap;
-  opacity: 0.9;
+  opacity: 0;
+  transition: all 0.4s;
+  font-weight: 500;
+  box-shadow: 0 2px 10px var(--accent-glow);
 }
-.connected-dot {
-  display: inline-block;
-  width: 8px; height: 8px;
-  border-radius: 50%;
-  margin-right: 6px;
-}
-.dot-online { background: #2ecc71; }
-.dot-offline { background: #e74c3c; }
 
-/* ステータス */
-.stats-card {
-  background: #16213e;
-  border-radius: 12px;
-  padding: 16px;
+.activity-bubble.visible {
+  opacity: 1;
+  bottom: -8px;
+}
+
+/* ── ステータスバー ── */
+.stat-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+  position: relative;
+}
+
+.stat-row:last-child { margin-bottom: 0; }
+
+.stat-icon {
+  width: 28px;
+  text-align: center;
+  font-size: 1em;
+}
+
+.stat-bar-container {
+  flex: 1;
+  height: 8px;
+  background: rgba(255,255,255,0.05);
+  border-radius: 10px;
+  overflow: hidden;
+  position: relative;
+}
+
+.stat-bar {
+  height: 100%;
+  border-radius: 10px;
+  transition: width 0.6s cubic-bezier(0.4, 0, 0.2, 1);
+  position: relative;
+}
+.stat-bar::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, transparent 0%, rgba(255,255,255,0.15) 50%, transparent 100%);
+  animation: shimmer 2s infinite;
+}
+@keyframes shimmer {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(100%); }
+}
+
+.stat-value {
+  width: 30px;
+  text-align: right;
+  font-size: 0.8em;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.bar-energy { background: linear-gradient(90deg, #f39c12, #fdcb6e); }
+.bar-hunger { background: linear-gradient(90deg, #d63031, #e17055); }
+.bar-fatigue { background: linear-gradient(90deg, #6c5ce7, #a29bfe); }
+.bar-loneliness { background: linear-gradient(90deg, #0984e3, #74b9ff); }
+.bar-spirit { background: linear-gradient(90deg, #00b894, #55efc4); }
+
+/* アクティビティ表示 */
+.activity-display {
+  text-align: center;
+  padding: 8px 0 12px;
+  border-bottom: 1px solid var(--border);
   margin-bottom: 12px;
 }
-.stat-row { display: flex; align-items: center; margin: 8px 0; gap: 8px; }
-.stat-label { width: 50px; font-size: 0.85em; opacity: 0.7; }
-.stat-bar { flex: 1; height: 8px; background: #0f3460; border-radius: 4px; overflow: hidden; }
-.stat-fill { height: 100%; border-radius: 4px; transition: width 0.5s; }
-.stat-val { width: 28px; text-align: right; font-size: 0.8em; font-variant-numeric: tabular-nums; }
-.fill-energy { background: #f1c40f; }
-.fill-hunger { background: #e67e22; }
-.fill-fatigue { background: #9b59b6; }
-.fill-loneliness { background: #3498db; }
-.fill-spirit { background: #2ecc71; }
 
-/* チャット */
+.activity-text {
+  font-size: 0.95em;
+  font-weight: 500;
+  color: var(--accent-light);
+}
+
+.activity-remaining {
+  font-size: 0.75em;
+  color: var(--text-secondary);
+  margin-top: 2px;
+}
+
+/* 記憶カウント */
+.memory-count {
+  text-align: center;
+  font-size: 0.8em;
+  color: var(--text-secondary);
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+.memory-count span {
+  color: var(--accent-light);
+  font-weight: 700;
+  font-size: 1.1em;
+}
+
+/* ── チャット ── */
 .chat-area {
-  background: #16213e;
-  border-radius: 12px;
-  padding: 16px;
   display: flex;
   flex-direction: column;
-  height: 300px;
-  margin-top: 12px;
+  flex: 1;
+  min-height: 250px;
 }
-.chat-msgs {
+
+.chat-messages {
   flex: 1;
   overflow-y: auto;
-  margin-bottom: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 12px;
+  padding-right: 4px;
+}
+
+.chat-messages::-webkit-scrollbar {
+  width: 4px;
+}
+.chat-messages::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 4px;
+}
+
+.chat-msg {
+  padding: 8px 14px;
+  border-radius: 16px;
+  max-width: 85%;
+  font-size: 0.85em;
+  line-height: 1.5;
+  animation: msgIn 0.3s ease-out;
+  position: relative;
+}
+
+@keyframes msgIn {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.chat-user {
+  background: linear-gradient(135deg, #0984e3, #6c5ce7);
+  align-self: flex-end;
+  border-bottom-right-radius: 4px;
+}
+
+.chat-monika {
+  background: rgba(255,255,255,0.08);
+  border: 1px solid var(--border);
+  align-self: flex-start;
+  border-bottom-left-radius: 4px;
+}
+
+.chat-ts {
+  font-size: 0.6em;
+  opacity: 0.5;
+  margin-top: 4px;
+  text-align: right;
+}
+
+.chat-input-row {
+  display: flex;
+  gap: 8px;
+}
+
+.chat-input {
+  flex: 1;
+  background: rgba(255,255,255,0.05);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 10px 16px;
+  color: var(--text-primary);
+  font-size: 0.85em;
+  font-family: inherit;
+  transition: all 0.2s;
+}
+
+.chat-input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 16px var(--accent-glow);
+}
+
+.chat-input::placeholder {
+  color: var(--text-secondary);
+  opacity: 0.6;
+}
+
+.chat-send {
+  background: linear-gradient(135deg, var(--accent), #5a4bd1);
+  border: none;
+  border-radius: 12px;
+  padding: 10px 20px;
+  color: #fff;
+  cursor: pointer;
+  font-size: 0.85em;
+  font-weight: 500;
+  transition: all 0.2s;
+  white-space: nowrap;
+}
+
+.chat-send:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 16px var(--accent-glow);
+}
+
+.chat-send:active {
+  transform: translateY(0);
+}
+
+.chat-send:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+  transform: none;
+}
+
+/* ── タイムライン ── */
+.timeline {
+  max-height: 200px;
+  overflow-y: auto;
   display: flex;
   flex-direction: column;
   gap: 6px;
 }
-.chat-msg {
-  padding: 6px 10px;
-  border-radius: 8px;
-  max-width: 80%;
+
+.timeline::-webkit-scrollbar {
+  width: 4px;
+}
+.timeline::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 4px;
+}
+
+.timeline-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.78em;
+  color: var(--text-secondary);
+  padding: 4px 0;
+  border-bottom: 1px solid rgba(255,255,255,0.03);
+}
+
+.timeline-time {
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+  min-width: 40px;
   font-size: 0.85em;
-  line-height: 1.4;
 }
-.chat-user { background: #2980b9; align-self: flex-end; }
-.chat-monika { background: #2c3e50; align-self: flex-start; }
-.chat-ts { font-size: 0.65em; opacity: 0.5; margin-top: 2px; }
-.chat-input-row { display: flex; gap: 6px; }
-.chat-input {
+
+.timeline-activity {
+  color: var(--text-primary);
   flex: 1;
-  background: #0f3460;
-  border: none;
-  border-radius: 8px;
-  padding: 8px 12px;
-  color: #e0e0e0;
-  font-size: 0.9em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
-.chat-input:focus { outline: none; box-shadow: 0 0 0 2px #3498db; }
-.chat-send {
-  background: #3498db;
-  border: none;
-  border-radius: 8px;
-  padding: 8px 16px;
-  color: #fff;
-  cursor: pointer;
-  font-size: 0.9em;
-}
-.chat-send:hover { background: #2980b9; }
-.chat-send:disabled { opacity: 0.5; cursor: default; }
 
-/* アニメーション */
-@keyframes pulse {
-  0%, 100% { transform: scale(1); }
-  50% { transform: scale(1.1); }
+/* ── レスポンシブ ── */
+@media (max-width: 820px) {
+  .container {
+    flex-direction: column;
+    padding: 12px;
+  }
+  .side-panel {
+    width: 100%;
+  }
+  .map-grid {
+    gap: 6px;
+  }
+  .room-cell {
+    min-height: 90px;
+    padding: 14px 8px;
+  }
+  .header {
+    padding: 10px 16px;
+  }
 }
-.monika-icon.active { animation: pulse 2s infinite; }
 
-/* レスポンシブ */
-@media (max-width: 700px) {
-  .container { flex-direction: column; }
-  .stats-panel { width: 100%; }
-  .map-panel { min-width: 0; }
+@media (max-width: 480px) {
+  .room-cell {
+    min-height: 70px;
+    padding: 10px 6px;
+  }
+  .room-icon {
+    font-size: 1.4em;
+  }
+  .room-name {
+    font-size: 0.75em;
+  }
+  .room-label {
+    display: none;
+  }
 }
 </style>
 </head>
 <body>
-<div class="header">
-  <span class="connected-dot" id="statusDot"></span>
-  モニカの部屋 <span id="statusText">接続中…</span>
-  <span style="float:right;font-size:0.8em;opacity:0.6" id="clockDisplay"></span>
-</div>
 
+<!-- Header -->
+<header class="header">
+  <div class="header-left">
+    <div class="status-indicator">
+      <div class="status-dot" id="statusDot"></div>
+      <span class="header-title">✦ モニカの部屋</span>
+    </div>
+  </div>
+  <div class="header-right">
+    <span id="statusLabel">接続中…</span>
+    <span id="clockDisplay"></span>
+  </div>
+</header>
+
+<!-- Main -->
 <div class="container">
+  <!-- 箱庭マップ -->
   <div class="map-panel">
-    <div class="map-grid" id="mapGrid">
+    <div class="card">
+      <div class="map-grid" id="mapGrid"></div>
     </div>
   </div>
 
-  <div class="stats-panel">
-    <div class="stats-card">
-      <div style="text-align:center;margin-bottom:8px;font-size:0.9em" id="activityText">-</div>
-      <div class="stat-row"><span class="stat-label">⚡</span><div class="stat-bar"><div class="stat-fill fill-energy" id="energyBar"></div></div><span class="stat-val" id="energyVal">0</span></div>
-      <div class="stat-row"><span class="stat-label">🍽</span><div class="stat-bar"><div class="stat-fill fill-hunger" id="hungerBar"></div></div><span class="stat-val" id="hungerVal">0</span></div>
-      <div class="stat-row"><span class="stat-label">😴</span><div class="stat-bar"><div class="stat-fill fill-fatigue" id="fatigueBar"></div></div><span class="stat-val" id="fatigueVal">0</span></div>
-      <div class="stat-row"><span class="stat-label">💔</span><div class="stat-bar"><div class="stat-fill fill-loneliness" id="lonelinessBar"></div></div><span class="stat-val" id="lonelinessVal">0</span></div>
-      <div class="stat-row"><span class="stat-label">😊</span><div class="stat-bar"><div class="stat-fill fill-spirit" id="spiritBar"></div></div><span class="stat-val" id="spiritVal">0</span></div>
-      <div style="text-align:center;font-size:0.75em;margin-top:6px;opacity:0.5">🧠 <span id="memCount">0</span>件の記憶</div>
+  <!-- サイドパネル -->
+  <div class="side-panel">
+    <!-- ステータス -->
+    <div class="card">
+      <div class="activity-display">
+        <div class="activity-text" id="activityText">—</div>
+        <div class="activity-remaining" id="activityRemaining"></div>
+      </div>
+      <div class="stat-row">
+        <span class="stat-icon">⚡</span>
+        <div class="stat-bar-container"><div class="stat-bar bar-energy" id="energyBar"></div></div>
+        <span class="stat-value" id="energyVal" style="color:var(--energy)">0</span>
+      </div>
+      <div class="stat-row">
+        <span class="stat-icon">🍽️</span>
+        <div class="stat-bar-container"><div class="stat-bar bar-hunger" id="hungerBar"></div></div>
+        <span class="stat-value" id="hungerVal" style="color:var(--hunger)">0</span>
+      </div>
+      <div class="stat-row">
+        <span class="stat-icon">😴</span>
+        <div class="stat-bar-container"><div class="stat-bar bar-fatigue" id="fatigueBar"></div></div>
+        <span class="stat-value" id="fatigueVal" style="color:var(--fatigue)">0</span>
+      </div>
+      <div class="stat-row">
+        <span class="stat-icon">💔</span>
+        <div class="stat-bar-container"><div class="stat-bar bar-loneliness" id="lonelinessBar"></div></div>
+        <span class="stat-value" id="lonelinessVal" style="color:var(--loneliness)">0</span>
+      </div>
+      <div class="stat-row">
+        <span class="stat-icon">😊</span>
+        <div class="stat-bar-container"><div class="stat-bar bar-spirit" id="spiritBar"></div></div>
+        <span class="stat-value" id="spiritVal" style="color:var(--spirit)">0</span>
+      </div>
+      <div class="memory-count">🧠 <span id="memCount">0</span> 件の記憶</div>
     </div>
 
-    <div class="chat-area">
-      <div class="chat-msgs" id="chatMsgs"></div>
+    <!-- チャット -->
+    <div class="card chat-area">
+      <div class="chat-messages" id="chatMsgs"></div>
       <div class="chat-input-row">
-        <input class="chat-input" id="chatInput" placeholder="話しかける…" maxlength="200">
+        <input class="chat-input" id="chatInput" placeholder="メッセージを送る…" maxlength="200">
         <button class="chat-send" id="chatSend">送信</button>
       </div>
+    </div>
+
+    <!-- アクティビティログ -->
+    <div class="card">
+      <div class="card-title">📋 最近の行動</div>
+      <div class="timeline" id="timeline"></div>
     </div>
   </div>
 </div>
 
 <script>
+// ── 部屋マップ生成 ──
 const ROOMS = {
-  bedroom:   { col: 1, row: 1, label: '🛏 寝室' },
-  living_room: { col: 2, row: 1, label: '🛋 リビング' },
-  kitchen:   { col: 2, row: 2, label: '🍳 キッチン' },
-  bathroom:  { col: 1, row: 2, label: '🚿 浴室' },
-  entrance:  { col: 1, row: 3, label: '🚪 玄関' },
-  garden:    { col: 2, row: 3, label: '🌳 庭' },
+  bedroom:     { col: 1, row: 1, label: '寝室', icon: '🛏️' },
+  living_room: { col: 2, row: 1, label: 'リビング', icon: '🛋️' },
+  kitchen:     { col: 1, row: 2, label: 'キッチン', icon: '🍳' },
+  bathroom:    { col: 2, row: 2, label: '浴室', icon: '🚿' },
+  entrance:    { col: 1, row: 3, label: '玄関', icon: '🚪' },
+  garden:      { col: 2, row: 3, label: '庭', icon: '🌳' },
 };
 
 const mapGrid = document.getElementById('mapGrid');
 mapGrid.style.gridTemplateRows = 'repeat(3, 1fr)';
-
 const roomEls = {};
+
 for (const [id, r] of Object.entries(ROOMS)) {
   const el = document.createElement('div');
   el.className = 'room-cell';
   el.id = 'room-' + id;
   el.style.gridColumn = r.col;
   el.style.gridRow = r.row;
-  el.innerHTML = '<div class="monika-icon" id="monika-' + id + '" style="display:none">🎀</div>'
-    + '<div style="margin-top:16px">' + r.label.split(' ')[0] + '</div>'
-    + '<div class="room-label">' + (r.label.split(' ').slice(1).join(' ') || '') + '</div>'
-    + '<div class="activity-bubble" id="bubble-' + id + '" style="display:none"></div>';
+  el.innerHTML =
+    '<div class="monika-character" id="monika-' + id + '">🎀</div>'
+    + '<div class="room-icon">' + r.icon + '</div>'
+    + '<div class="room-name">' + r.label + '</div>'
+    + '<div class="room-label"></div>'
+    + '<div class="activity-bubble" id="bubble-' + id + '"></div>';
   mapGrid.appendChild(el);
   roomEls[id] = el;
 }
 
-// SSE
+// ── SSE接続 ──
 const evtSource = new EventSource('/events');
 evtSource.onmessage = (e) => {
   const d = JSON.parse(e.data);
   updateUI(d);
 };
 evtSource.onerror = () => {
-  document.getElementById('statusDot').className = 'connected-dot dot-offline';
-  document.getElementById('statusText').textContent = '切断';
+  setOnline(false);
 };
 
-function updateUI(d) {
-  document.getElementById('statusDot').className = 'connected-dot dot-online';
-  document.getElementById('statusText').textContent = d.time + '  ' + d.activity || '休憩中';
+function setOnline(online) {
+  const dot = document.getElementById('statusDot');
+  const label = document.getElementById('statusLabel');
+  if (online) {
+    dot.className = 'status-dot dot-online';
+    label.textContent = 'オンライン';
+  } else {
+    dot.className = 'status-dot dot-offline';
+    label.textContent = 'オフライン';
+  }
+}
 
-  // 部屋アクティブ
+function updateUI(d) {
+  setOnline(true);
+
+  // アクティビティ表示
+  document.getElementById('activityText').textContent = d.activity
+    ? '📖 ' + d.activity
+    : '☕ 休憩中';
+  document.getElementById('activityRemaining').textContent = d.activity_remaining
+    ? 'あと ' + d.activity_remaining + ' 分'
+    : '';
+
+  // 部屋マップ更新
   for (const id of Object.keys(ROOMS)) {
     const el = roomEls[id];
-    el.classList.toggle('active', id === d.room);
-    document.getElementById('monika-' + id).style.display = id === d.room ? 'block' : 'none';
+    const isActive = id === d.room;
+    el.classList.toggle('active', isActive);
+    document.getElementById('monika-' + id).classList.toggle('visible', isActive);
     const bubble = document.getElementById('bubble-' + id);
-    if (id === d.room && d.activity) {
-      bubble.style.display = 'block';
+    if (isActive && d.activity) {
       bubble.textContent = d.activity;
+      bubble.classList.add('visible');
     } else {
-      bubble.style.display = 'none';
+      bubble.classList.remove('visible');
     }
   }
 
-  // ステータス
-  const stats = { energy: d.energy, hunger: d.hunger, fatigue: d.fatigue, loneliness: d.loneliness, spirit: d.spirit };
+  // ステータスバー
+  const stats = {
+    energy: d.energy, hunger: d.hunger, fatigue: d.fatigue,
+    loneliness: d.loneliness, spirit: d.spirit
+  };
   for (const [k, v] of Object.entries(stats)) {
-    document.getElementById(k + 'Bar').style.width = v + '%';
-    document.getElementById(k + 'Val').textContent = v;
+    const bar = document.getElementById(k + 'Bar');
+    if (bar) {
+      bar.style.width = v + '%';
+    }
+    const val = document.getElementById(k + 'Val');
+    if (val) {
+      val.textContent = v;
+    }
   }
   document.getElementById('memCount').textContent = d.memories || 0;
 
-  // メッセージ
+  // チャット
   const chat = document.getElementById('chatMsgs');
-  if (d.messages) {
+  if (d.messages && Array.isArray(d.messages)) {
     chat.innerHTML = d.messages.map(m =>
       '<div class="chat-msg chat-' + (m.role === 'user' ? 'user' : 'monika') + '">'
-      + '<div>' + m.text + '</div>'
-      + '<div class="chat-ts">' + m.ts + '</div>'
+      + '<div>' + escHtml(m.text) + '</div>'
+      + '<div class="chat-ts">' + (m.ts || '') + '</div>'
       + '</div>'
     ).join('');
     chat.scrollTop = chat.scrollHeight;
   }
+
+  // タイムライン
+  const timeline = document.getElementById('timeline');
+  if (d.history && Array.isArray(d.history)) {
+    timeline.innerHTML = d.history.slice(-10).reverse().map(e =>
+      '<div class="timeline-item">'
+      + '<span class="timeline-time">' + e.time + '</span>'
+      + '<span class="timeline-activity">' + (e.activity || '—') + '</span>'
+      + '</div>'
+    ).join('');
+  }
 }
 
-// 時計
+function escHtml(s) {
+  if (!s) return '';
+  const d = document.createElement('div');
+  d.textContent = s;
+  return d.innerHTML;
+}
+
+// ── 時計 ──
 function updateClock() {
   const now = new Date();
-  document.getElementById('clockDisplay').textContent = now.toLocaleTimeString('ja-JP', {hour:'2-digit',minute:'2-digit'});
+  const t = now.toLocaleTimeString('ja-JP', {hour:'2-digit',minute:'2-digit'});
+  document.getElementById('clockDisplay').textContent = t;
 }
 setInterval(updateClock, 10000);
 updateClock();
 
-// メッセージ送信
+// ── メッセージ送信 ──
 const input = document.getElementById('chatInput');
 const sendBtn = document.getElementById('chatSend');
 
@@ -444,6 +940,7 @@ async function doSend() {
   if (!text) return;
   input.value = '';
   sendBtn.disabled = true;
+  sendBtn.textContent = '…';
   try {
     const resp = await fetch('/send', {
       method: 'POST',
@@ -453,13 +950,16 @@ async function doSend() {
     const data = await resp.json();
     if (data.reply) {
       const chat = document.getElementById('chatMsgs');
-      chat.innerHTML += '<div class="chat-msg chat-monika">' + data.reply + '<div class="chat-ts">今</div></div>';
+      chat.innerHTML += '<div class="chat-msg chat-monika">'
+        + escHtml(data.reply)
+        + '<div class="chat-ts">今</div></div>';
       chat.scrollTop = chat.scrollHeight;
     }
   } catch(e) {
     console.error(e);
   }
   sendBtn.disabled = false;
+  sendBtn.textContent = '送信';
 }
 
 sendBtn.addEventListener('click', doSend);

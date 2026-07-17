@@ -1,0 +1,90 @@
+# モニカの活動定義
+# 新しい活動を追加するにはこのファイルを編集するだけでOK
+# フォーマット:
+#   activity_name:
+#     duration: 分 (デフォルトの活動時間)
+#     tags: {タグ名: 強度 (0.0〜1.0), ...}
+#     initial_beliefs: {energy: 効果/h, hunger: 効果/h, fatigue: 効果/h, loneliness: 効果/h, spirit: 効果/h}
+#     locations: [許可される部屋]（省略可、省略時は全ロケーションで許可）
+
+sleep:
+  duration: 60
+  tags: {sleep: 0.8, rest: 0.3}
+  initial_beliefs: {energy: 30, hunger: 5, fatigue: -25, loneliness: 2, spirit: -3}
+  locations: [bedroom]
+
+deep_sleep:
+  duration: 60
+  tags: {sleep: 1.0, rest: 0.2}
+  initial_beliefs: {energy: 40, hunger: 5, fatigue: -35, loneliness: 1, spirit: 0}
+  locations: [bedroom]
+
+eat:
+  duration: 30
+  tags: {nourish: 1.0, rest: 0.1}
+  initial_beliefs: {energy: 5, hunger: -40, fatigue: -2, loneliness: 0, spirit: 2}
+  locations: [kitchen]
+
+piano:
+  duration: 30
+  tags: {play: 0.8, mental: 0.3, exertion: 0.1}
+  initial_beliefs: {energy: -8, hunger: 2, fatigue: 6, loneliness: -2, spirit: 12}
+  locations: [bedroom]
+
+piano_long:
+  duration: 60
+  tags: {play: 0.9, mental: 0.4, exertion: 0.2}
+  initial_beliefs: {energy: -15, hunger: 3, fatigue: 10, loneliness: -3, spirit: 20}
+  locations: [bedroom]
+
+read:
+  duration: 60
+  tags: {mental: 0.7, play: 0.2, boredom: 0.3}
+  initial_beliefs: {energy: -5, hunger: 1, fatigue: 2, loneliness: -1, spirit: 8}
+  locations: [bedroom, living_room, garden]
+
+idle:
+  duration: 30
+  tags: {boredom: 0.8, rest: 0.1}
+  initial_beliefs: {energy: -3, hunger: 1, fatigue: 1, loneliness: 5, spirit: -3}
+
+rest:
+  duration: 30
+  tags: {rest: 0.7, boredom: 0.3}
+  initial_beliefs: {energy: 10, hunger: 0, fatigue: -10, loneliness: 4, spirit: -2}
+  is_rest: true
+  locations: [bedroom, living_room, garden]
+
+stretch:
+  duration: 15
+  tags: {rest: 0.6, exertion: 0.1}
+  initial_beliefs: {energy: 5, hunger: 0, fatigue: -3, loneliness: 0, spirit: 3}
+  locations: [bedroom, living_room, garden]
+
+write_diary:
+  duration: 30
+  tags: {mental: 0.5, play: 0.4}
+  initial_beliefs: {energy: -3, hunger: 0, fatigue: 1, loneliness: -5, spirit: 5}
+  locations: [bedroom]
+
+walk:
+  duration: 30
+  tags: {exertion: 0.3, outdoor: 0.8, play: 0.1}
+  initial_beliefs: {energy: -5, hunger: 3, fatigue: 8, loneliness: -5, spirit: 10}
+  locations: [garden]
+
+talk:
+  duration: 15
+  tags: {social: 0.9, mental: 0.2}
+  initial_beliefs: {energy: -2, hunger: 0, fatigue: 1, loneliness: -15, spirit: 5}
+  locations: [living_room]
+
+send_message:
+  duration: 10
+  tags: {social: 0.3, mental: 0.6}
+  initial_beliefs: {energy: -1, hunger: 0, fatigue: 0, loneliness: 0, spirit: 2}
+
+check_phone:
+  duration: 10
+  tags: {mental: 0.4, boredom: 0.3}
+  initial_beliefs: {energy: 0, hunger: 0, fatigue: 0, loneliness: -2, spirit: 1}

@@ -1,4 +1,6 @@
 import json
+import logging
+import os
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Optional
@@ -6,6 +8,9 @@ import random
 import math
 from datetime import datetime, timedelta
 from pathlib import Path
+
+
+logger = logging.getLogger(__name__)
 
 
 class VitalParam(Enum):
@@ -160,6 +165,93 @@ SETPOINTS = {
     VitalParam.SPIRIT: 65,
 }
 
+
+def load_activities_from_yaml(path: str | Path | None = None) -> bool:
+    """activities.yaml から活動定義を読み込んでグローバル変数を上書きする
+    戻り値: 読み込み成功=True, ファイルなし=False
+    """
+    if path is None:
+        path = Path(__file__).resolve().parents[2] / "activities.yaml"
+    path = Path(path)
+    if not path.exists():
+        logger.info(f"activities.yaml not found at {path}, using hardcoded defaults")
+        return False
+
+    try:
+        import yaml
+    except ImportError:
+        logger.warning("PyYAML not installed. Install with: pip install pyyaml")
+        return False
+
+    try:
+        with open(path, encoding="utf-8") as f:
+            raw = yaml.safe_load(f)
+    except Exception as e:
+        logger.warning(f"Failed to parse {path}: {e}")
+        return False
+
+    if not isinstance(raw, dict):
+        return False
+
+    # グローバル変数を更新
+    new_durations: dict[str, int] = {}
+    new_tags: dict[str, dict[str, float]] = {}
+    new_beliefs: dict[str, dict[str, float]] = {}
+
+    for act_name, act_def in raw.items():
+        if not isinstance(act_def, dict):
+            continue
+        name = act_name.strip()
+        dur = act_def.get("duration", 30)
+        tag_data = act_def.get("tags", {})
+        beliefs = act_def.get("initial_beliefs", {})
+
+        new_durations[name] = dur
+        new_tags[name] = {k: float(v) for k, v in tag_data.items()}
+        new_beliefs[name] = {
+            "energy": float(beliefs.get("energy", 0)),
+            "hunger": float(beliefs.get("hunger", 0)),
+            "fatigue": float(beliefs.get("fatigue", 0)),
+            "loneliness": float(beliefs.get("loneliness", 0)),
+            "spirit": float(beliefs.get("spirit", 0)),
+        }
+
+        # LOCATIONS の activities リストに追加
+        locs = act_def.get("locations")
+        if locs:
+            for loc_id in locs:
+                if loc_id in LOCATIONS and name not in LOCATIONS[loc_id]["activities"]:
+                    LOCATIONS[loc_id]["activities"].append(name)
+        else:
+            # 全ロケーションに追加
+            for loc_id in LOCATIONS:
+                if name not in LOCATIONS[loc_id]["activities"]:
+                    LOCATIONS[loc_id]["activities"].append(name)
+
+    # グローバル辞書を更新
+    DURATIONS.clear()
+    DURATIONS.update(new_durations)
+    ACTIVITY_TAGS.clear()
+    ACTIVITY_TAGS.update(new_tags)
+    INITIAL_BELIEFS.clear()
+    INITIAL_BELIEFS.update(new_beliefs)
+
+    # ACTIVITIES 辞書を再構築
+    ACTIVITIES.clear()
+    for name, dur in DURATIONS.items():
+        beliefs = INITIAL_BELIEFS.get(name, {p: 0 for p in PARAMS})
+        kwargs = {PARAM_TO_KWARG[p]: beliefs[p] for p in PARAMS}
+        ACTIVITIES[name] = Activity(name, dur, **kwargs)
+
+    # is_rest フラグ
+    for act_name, act_def in raw.items():
+        if isinstance(act_def, dict) and act_def.get("is_rest", False):
+            if act_name in ACTIVITIES:
+                ACTIVITIES[act_name].is_rest = True
+
+    logger.info(f"Loaded {len(raw)} activities from {path}")
+    return True
+
 DRIFT_RATES = {
     VitalParam.ENERGY: -2,      # 基礎代謝（重力下で生存するだけで消費）
     VitalParam.HUNGER: 1.5,     # 血糖値の自然減少
@@ -298,6 +390,11 @@ class VitalOS:
         self.activity_total_duration: int = 0
         self.current_room: str = "bedroom"
         self.phone: PhoneState = PhoneState()
+        # activities.yaml があれば読み込む
+        try:
+            load_activities_from_yaml()
+        except Exception as exc:
+            logger.debug(f"Could not load activities.yaml: {exc}")
 
     DATA_DIR = Path(__file__).resolve().parents[2] / "data"
     
@@ -306,8 +403,22 @@ class VitalOS:
         return self.DATA_DIR / "state.json"
 
     def save(self):
-        path = self._state_path()
-        data = {
+        data = self._build_save_data()
+        # SQLite 優先
+        try:
+            from .storage import save_simulation_state, model_save_deltas, model_save_counts, model_save_last_done
+            save_simulation_state(data)
+            model_save_deltas(dict(self.model.deltas))
+            model_save_counts(dict(self.model.counts))
+            model_save_last_done(dict(self.model.last_done_time))
+        except Exception as exc:
+            logger.debug(f"SQLite save failed, using JSON: {exc}")
+            # JSON フォールバック
+            path = self._state_path()
+            path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    def _build_save_data(self) -> dict:
+        return {
             "state": self.state.as_float_dict(),
             "time": self.time.isoformat(),
             "current_activity": self.current_activity,
@@ -332,14 +443,29 @@ class VitalOS:
                 "last_outgoing_text": self.phone.last_outgoing_text,
             },
         }
-        path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
     def load(self) -> bool:
+        # SQLite 優先
+        try:
+            from .storage import load_simulation_state, model_load_deltas, model_load_counts, model_load_last_done
+            data = load_simulation_state()
+            if data:
+                return self._apply_loaded_data(data)
+        except Exception as exc:
+            logger.debug(f"SQLite load failed, trying JSON: {exc}")
+
+        # JSON フォールバック
         path = self._state_path()
         if not path.exists():
             return False
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
+            return self._apply_loaded_data(data)
+        except Exception:
+            return False
+
+    def _apply_loaded_data(self, data: dict) -> bool:
+        try:
             for k, v in data["state"].items():
                 setattr(self.state, k, v)
             self.time = datetime.fromisoformat(data["time"])
@@ -351,10 +477,12 @@ class VitalOS:
                 Event(e["time"], e["activity"], e["state_before"], e["state_after"])
                 for e in data["history"]
             ]
-            self.model.deltas.update(data["model_deltas"])
-            self.model.counts.update(
-                {k: int(v) for k, v in data["model_counts"].items()}
-            )
+            if "model_deltas" in data:
+                self.model.deltas.update(data["model_deltas"])
+            if "model_counts" in data:
+                self.model.counts.update(
+                    {k: int(v) for k, v in data["model_counts"].items()}
+                )
             for name, t_str in data.get("last_done", {}).items():
                 self.model.last_done_time[name] = (
                     datetime.fromisoformat(t_str) if t_str else None

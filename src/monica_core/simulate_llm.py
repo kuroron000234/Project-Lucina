@@ -1,12 +1,16 @@
 import ast
 import importlib.resources  # Python 3.14 compat
 import json
+import logging
 import os
 import time
 import urllib.request
 import urllib.error
 from datetime import datetime
 from pathlib import Path
+
+
+logger = logging.getLogger(__name__)
 
 _env_path = Path(__file__).resolve().parents[2] / ".env"
 if _env_path.exists():
@@ -261,15 +265,24 @@ class ConsciousVitalOS(VitalOS):
         mem_path = self.DATA_DIR / "memory_store.json"
         self.memory = Memory(str(mem_path))
         self.reader = ReadingHandler(str(self.DATA_DIR))
+        self._llm_failures = 0
+        self._max_llm_failures = 3
 
     def _call_llm(self, prompt: str) -> str | None:
+        """LLM呼び出し。失敗時は _llm_failures をインクリメント"""
+        if self._llm_failures >= self._max_llm_failures:
+            logger.warning(f"LLM failures exceeded ({self._llm_failures}), skipping call")
+            return None
         try:
             response = _zen_chat(self.llm_model, [
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": prompt},
             ])
+            self._llm_failures = 0  # 成功したらリセット
             return response["choices"][0]["message"]["content"].strip()
-        except Exception:
+        except Exception as e:
+            self._llm_failures += 1
+            logger.warning(f"LLM call failed ({self._llm_failures}/{self._max_llm_failures}): {e}")
             return None
 
     def _ensure_agent(self):
@@ -608,7 +621,14 @@ class ConsciousVitalOS(VitalOS):
             return (action, duration)
 
         except (json.JSONDecodeError, KeyError, Exception) as e:
+            logger.debug(f"LLM decide parse failed: {e}")
             self.day_log.append(f"[{self.time.strftime('%H:%M')}] …何しようかな（考え中）")
+            # LLM障害時のフォールバック: 親クラスのルールベース判断に切り替え
+            if self._llm_failures >= self._max_llm_failures:
+                logger.info("LLM failures threshold reached, falling back to rule-based decide")
+                fallback = super().decide_next()
+                self.day_log.append(f"[{self.time.strftime('%H:%M')}] （自動判断: {fallback[0]}）")
+                return fallback
             return ("idle", 30)
 
     def monologue(self) -> str:
@@ -681,6 +701,7 @@ def simulate_living(model: str = "deepseek-v4-flash-free", tick_minutes: int = 1
     auto_phone_counter = 0
     os._pending_message = ""
     os._pending_reply_from = []
+    compress_counter = 0  # 記憶圧縮カウンター
 
     while True:
         if realtime:
@@ -722,6 +743,15 @@ def simulate_living(model: str = "deepseek-v4-flash-free", tick_minutes: int = 1
         if save_interval_ticks <= 0:
             os.save()
             save_interval_ticks = 1 if realtime else 96
+            # 定期的な記憶圧縮
+            compress_counter += 1
+            if compress_counter >= 10:  # 10保存ごと
+                try:
+                    os.memory.compress(max_entries=300)
+                    logger.debug("Memory compressed")
+                except Exception as exc:
+                    logger.debug(f"Memory compression failed: {exc}")
+                compress_counter = 0
 
         if realtime:
             _time.sleep(tick_minutes * 60)
