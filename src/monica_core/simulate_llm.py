@@ -439,7 +439,7 @@ class ConsciousVitalOS(VitalOS):
             import re
             text = re.sub(r'["「」『』\n]', '', text).strip()[:200]
             from .phone import add
-            add("monika", text, self.time.isoformat())
+            add("monika", text, self.time.isoformat(), source="monika")
             self.phone.last_outgoing_time = self.time.isoformat()
             self.phone.last_outgoing_text = text
             self._pending_message = text
@@ -471,7 +471,7 @@ class ConsciousVitalOS(VitalOS):
 
             reply = self._generate_reply(unread)
             if reply:
-                phone_add("monika", reply, self.time.isoformat())
+                phone_add("monika", reply, self.time.isoformat(), source="monika")
                 self.phone.last_outgoing_time = self.time.isoformat()
                 self.phone.last_outgoing_text = reply
                 self.day_log.append(
@@ -650,6 +650,9 @@ def simulate_living(model: str = "deepseek-v4-flash-free", tick_minutes: int = 1
                     monologue_interval: int = 4, daemon: bool = False, realtime: bool = False):
     if realtime:
         tick_minutes = 5
+    elif not daemon:
+        print("⚠️  --realtime フラグなしで起動中。時刻が壁時計と同期しません")
+        print("   推奨: PYTHONPATH=src:$PYTHONPATH python3 -m monica_core.simulate_llm --resume --realtime\n")
     os = ConsciousVitalOS(model=model)
     resumed = resume and os.load()
     if resumed:
@@ -699,6 +702,7 @@ def simulate_living(model: str = "deepseek-v4-flash-free", tick_minutes: int = 1
     last_day = os.time.day
     save_interval_ticks = 1 if realtime else 96
     auto_phone_counter = 0
+    auto_phone_last_sim_minutes = 0  # sim時間ベースの電話チェック
     os._pending_message = ""
     os._pending_reply_from = []
     compress_counter = 0  # 記憶圧縮カウンター
@@ -719,11 +723,17 @@ def simulate_living(model: str = "deepseek-v4-flash-free", tick_minutes: int = 1
 
         os.tick(tick_minutes, advance_clock=not realtime)
 
-        auto_phone_counter += 1
-        if auto_phone_counter >= 3:  # 15分に1回（5分tick時）
+        # スマホ自動確認: sim時間で15分に1回
+        current_sim_minutes = os.time.hour * 60 + os.time.minute
+        elapsed_sim = current_sim_minutes - auto_phone_last_sim_minutes
+        if elapsed_sim < 0:
+            elapsed_sim += 1440  # 日付変更
+        auto_phone_counter += tick_minutes
+        if auto_phone_counter >= 15:
             if hasattr(os, '_check_phone'):
                 os._check_phone()
             auto_phone_counter = 0
+            auto_phone_last_sim_minutes = current_sim_minutes
 
         if os.time.day != last_day:
             if not daemon:

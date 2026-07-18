@@ -72,7 +72,8 @@ def _init_db():
             sender    TEXT NOT NULL,
             text      TEXT NOT NULL,
             timestamp TEXT NOT NULL,
-            read_by_recipient INTEGER DEFAULT 0
+            read_by_recipient INTEGER DEFAULT 0,
+            source    TEXT DEFAULT ''
         );
 
         CREATE TABLE IF NOT EXISTS memories (
@@ -114,6 +115,17 @@ def _init_db():
         CREATE INDEX IF NOT EXISTS idx_phone_timestamp ON phone_messages(timestamp);
     """)
     conn.commit()
+
+    # スキーママイグレーション: 既存DBに source カラムがない場合に追加
+    _migrate_schema(conn)
+
+
+def _migrate_schema(conn):
+    """既存データベースのスキーマを最新に更新"""
+    try:
+        conn.execute("ALTER TABLE phone_messages ADD COLUMN source TEXT DEFAULT ''")
+    except sqlite3.OperationalError:
+        pass  # カラムは既に存在する
 
 
 def _try_migrate_from_json():
@@ -168,9 +180,10 @@ def _migrate_phone_json(conn):
         cur = conn.cursor()
         for m in msgs:
             cur.execute(
-                "INSERT INTO phone_messages (sender, text, timestamp, read_by_recipient) VALUES (?, ?, ?, ?)",
+                "INSERT INTO phone_messages (sender, text, timestamp, read_by_recipient, source) VALUES (?, ?, ?, ?, ?)",
                 (m.get("sender", ""), m.get("text", ""), m.get("timestamp", ""),
-                 1 if m.get("read_by_recipient", False) else 0),
+                 1 if m.get("read_by_recipient", False) else 0,
+                 m.get("source", "")),
             )
         conn.commit()
         logger.info(f"Migrated {len(msgs)} phone messages → SQLite")
@@ -278,13 +291,13 @@ def load_simulation_state() -> Optional[dict]:
 
 # ── 電話メッセージ ──
 
-def phone_add(sender: str, text: str, timestamp: str) -> int:
+def phone_add(sender: str, text: str, timestamp: str, source: str = "") -> int:
     """メッセージを追加"""
     _ensure_initialized()
     conn = _get_conn()
     cur = conn.execute(
-        "INSERT INTO phone_messages (sender, text, timestamp, read_by_recipient) VALUES (?, ?, ?, 0)",
-        (sender, text, timestamp),
+        "INSERT INTO phone_messages (sender, text, timestamp, read_by_recipient, source) VALUES (?, ?, ?, 0, ?)",
+        (sender, text, timestamp, source),
     )
     conn.commit()
     return cur.lastrowid
@@ -295,7 +308,7 @@ def phone_load() -> list[dict]:
     _ensure_initialized()
     conn = _get_conn()
     rows = conn.execute(
-        "SELECT id, sender, text, timestamp, read_by_recipient FROM phone_messages ORDER BY id ASC"
+        "SELECT id, sender, text, timestamp, read_by_recipient, source FROM phone_messages ORDER BY id ASC"
     ).fetchall()
     return [
         {
@@ -303,6 +316,7 @@ def phone_load() -> list[dict]:
             "text": r["text"],
             "timestamp": r["timestamp"],
             "read_by_recipient": bool(r["read_by_recipient"]),
+            "source": r["source"] or "",
         }
         for r in rows
     ]
@@ -316,8 +330,10 @@ def phone_save(messages: list[dict]):
     cur = conn.cursor()
     for m in messages:
         cur.execute(
-            "INSERT INTO phone_messages (sender, text, timestamp, read_by_recipient) VALUES (?, ?, ?, ?)",
-            (m["sender"], m["text"], m["timestamp"], 1 if m.get("read_by_recipient", False) else 0),
+            "INSERT INTO phone_messages (sender, text, timestamp, read_by_recipient, source) VALUES (?, ?, ?, ?, ?)",
+            (m["sender"], m["text"], m["timestamp"],
+             1 if m.get("read_by_recipient", False) else 0,
+             m.get("source", "")),
         )
     conn.commit()
 

@@ -19,6 +19,7 @@ class PhoneMessage:
     text: str
     timestamp: str
     read_by_recipient: bool = False
+    source: str = ""  # "web", "telegram", "monika", or ""
 
 
 # JSON フォールバック用
@@ -63,7 +64,8 @@ def save(messages: list[PhoneMessage]):
         from .storage import phone_save
         data = [
             {"sender": m.sender, "text": m.text,
-             "timestamp": m.timestamp, "read_by_recipient": m.read_by_recipient}
+             "timestamp": m.timestamp, "read_by_recipient": m.read_by_recipient,
+             "source": m.source}
             for m in messages
         ]
         phone_save(data)
@@ -79,7 +81,8 @@ def _save_json_fallback(messages: list[PhoneMessage]):
     STORE_PATH.parent.mkdir(parents=True, exist_ok=True)
     data = [
         {"sender": m.sender, "text": m.text,
-         "timestamp": m.timestamp, "read_by_recipient": m.read_by_recipient}
+         "timestamp": m.timestamp, "read_by_recipient": m.read_by_recipient,
+         "source": m.source if m.source else ""}
         for m in messages
     ]
     STORE_PATH.write_text(
@@ -87,14 +90,17 @@ def _save_json_fallback(messages: list[PhoneMessage]):
     )
 
 
-def add(sender: str, text: str, timestamp: str) -> PhoneMessage:
-    """メッセージを追加"""
+def add(sender: str, text: str, timestamp: str, source: str = "") -> PhoneMessage:
+    """メッセージを追加
+    source: "web", "telegram", "monika", or ""
+    """
     msg = PhoneMessage(sender=sender, text=text,
-                       timestamp=timestamp, read_by_recipient=False)
+                       timestamp=timestamp, read_by_recipient=False,
+                       source=source)
 
     try:
         from .storage import phone_add as storage_add
-        storage_add(sender, text, timestamp)
+        storage_add(sender, text, timestamp, source=source)
         return msg
     except Exception as e:
         logger.debug(f"SQLite phone_add failed, falling back to JSON: {e}")

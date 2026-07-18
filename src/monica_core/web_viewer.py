@@ -74,7 +74,52 @@ def _load_json(path: Path):
         return None
 
 
+def _get_state_sqlite() -> dict | None:
+    """SQLiteから状態を読み込み（Webビュアー用）"""
+    try:
+        from monica_core.storage import load_simulation_state, phone_load, memory_count
+        state = load_simulation_state()
+        if not state:
+            return None
+        msgs = phone_load()
+        mem_count = memory_count()
+        day_log = state.get("day_log", [])
+        history = state.get("history", [])
+        return {
+            "time": state.get("time", datetime.now().isoformat())[11:16],
+            "room": state.get("current_room", "bedroom"),
+            "activity": state.get("current_activity"),
+            "activity_remaining": state.get("activity_remaining", 0),
+            "energy": round(state.get("state", {}).get("energy", 50)),
+            "hunger": round(state.get("state", {}).get("hunger", 50)),
+            "fatigue": round(state.get("state", {}).get("fatigue", 50)),
+            "loneliness": round(state.get("state", {}).get("loneliness", 50)),
+            "spirit": round(state.get("state", {}).get("spirit", 50)),
+            "memories": mem_count,
+            "messages": [
+                {"role": m.get("sender", "?"), "text": m.get("text", "")[:80],
+                 "ts": m.get("timestamp", "")[11:19] if len(m.get("timestamp", "")) > 19 else "",
+                 "source": m.get("source", "")}
+                for m in msgs[-15:]
+            ],
+            "day_log": [l[-60:] for l in day_log[-8:]],
+            "history": [
+                {"time": e.get("time", "?"), "activity": e.get("activity", "?")}
+                for e in history[-10:]
+            ],
+        }
+    except Exception as e:
+        logger.debug(f"SQLite load failed: {e}")
+        return None
+
+
 def _get_state() -> dict:
+    # SQLite 優先
+    sqlite_state = _get_state_sqlite()
+    if sqlite_state:
+        return sqlite_state
+
+    # JSON フォールバック
     state = _load_json(DATA / "state.json") or {}
     memory = _load_json(DATA / "memory_store.json") or []
     msgs = _load_json(DATA / "phone_messages.json") or []
@@ -97,7 +142,8 @@ def _get_state() -> dict:
         ),
         "messages": [
             {"role": m.get("sender", "?"), "text": m.get("text", "")[:80],
-             "ts": m.get("timestamp", "")[11:19] if len(m.get("timestamp", "")) > 19 else ""}
+             "ts": m.get("timestamp", "")[11:19] if len(m.get("timestamp", "")) > 19 else "",
+             "source": m.get("source", "")}
             for m in (msgs[-15:] if isinstance(msgs, list) else [])
         ],
         "day_log": [l[-60:] for l in day_log[-8:]],
@@ -143,7 +189,7 @@ def send_message():
         return flask.jsonify({"error": "empty"}), 400
 
     from monica_core.phone import add as phone_add
-    phone_add("user", text, datetime.now().isoformat())
+    phone_add("user", text, datetime.now().isoformat(), source="web")
 
     prompt = f"""ユーザーが遊びに来たよ。今は一緒に過ごしてる。
 優しく、等身大の口調で話しかけて。短文で。返事だけ。
@@ -152,7 +198,7 @@ def send_message():
 
     reply = call_llm(prompt, max_tokens=200, temperature=0.8, max_retries=1)
     if reply:
-        phone_add("monika", reply, datetime.now().isoformat())
+        phone_add("monika", reply, datetime.now().isoformat(), source="monika")
 
     return flask.jsonify({"reply": reply or "…ごめん、うまく言葉にならない"})
 

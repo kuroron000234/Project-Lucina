@@ -404,7 +404,10 @@ class VitalOS:
 
     def save(self):
         data = self._build_save_data()
-        # SQLite 優先
+        # 常に JSON に保存（Webビュアー等他のプロセスが読めるように）
+        path = self._state_path()
+        path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        # SQLite にも保存
         try:
             from .storage import save_simulation_state, model_save_deltas, model_save_counts, model_save_last_done
             save_simulation_state(data)
@@ -412,10 +415,7 @@ class VitalOS:
             model_save_counts(dict(self.model.counts))
             model_save_last_done(dict(self.model.last_done_time))
         except Exception as exc:
-            logger.debug(f"SQLite save failed, using JSON: {exc}")
-            # JSON フォールバック
-            path = self._state_path()
-            path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+            logger.debug(f"SQLite save failed (non-critical): {exc}")
 
     def _build_save_data(self) -> dict:
         return {

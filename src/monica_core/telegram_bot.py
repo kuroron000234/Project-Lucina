@@ -102,7 +102,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     phone_mark_read("monika")
 
     # phone.add 経由でユーザーメッセージを追加
-    phone_add("user", text, now)
+    phone_add("user", text, now, source="telegram")
 
 
 async def push_monika_messages(context: ContextTypes.DEFAULT_TYPE):
