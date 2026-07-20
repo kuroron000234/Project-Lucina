@@ -709,7 +709,13 @@ def simulate_living(model: str = "deepseek-v4-flash-free", tick_minutes: int = 1
 
     while True:
         if realtime:
+            # 外部（Webビュアーなど）からの状態変更をDBから再読込
+            old_activity = os.current_activity
+            os.load()
             os.time = datetime.now()
+            if old_activity and os.current_activity != old_activity:
+                if not daemon:
+                    print(f"[{os.time.strftime('%H:%M')}] 🔄 外部からの活動変更を反映: {old_activity} → {os.current_activity}")
 
         if not os.current_activity:
             action, duration = os.decide_next()

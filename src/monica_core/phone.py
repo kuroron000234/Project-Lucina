@@ -38,6 +38,7 @@ def load() -> list[PhoneMessage]:
                     text=m["text"],
                     timestamp=m["timestamp"],
                     read_by_recipient=m.get("read_by_recipient", False),
+                    source=m.get("source", ""),
                 )
                 for m in msgs
             ]

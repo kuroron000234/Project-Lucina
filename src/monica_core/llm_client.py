@@ -30,13 +30,17 @@ def get_api_config() -> tuple[str, str, str]:
 
 
 def call_llm(prompt: str, max_tokens: int = 200, temperature: float = 0.8,
-             max_retries: int = 2) -> str | None:
+             max_retries: int = 2, system_prompt: str | None = None) -> str | None:
     key, base, model = get_api_config()
     if not key:
         return None
+    messages = []
+    if system_prompt:
+        messages.append({"role": "system", "content": system_prompt})
+    messages.append({"role": "user", "content": prompt})
     data = json.dumps({
         "model": model,
-        "messages": [{"role": "user", "content": prompt}],
+        "messages": messages,
         "max_tokens": max_tokens,
         "temperature": temperature,
     }).encode()

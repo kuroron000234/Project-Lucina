@@ -338,14 +338,23 @@ def phone_save(messages: list[dict]):
     conn.commit()
 
 
-def phone_mark_read(sender: str = "monika"):
-    """特定の送信者のメッセージを既読にする"""
+def phone_mark_read(sender: str = "monika", source: Optional[str] = None):
+    """特定の送信者のメッセージを既読にする
+    source: 指定するとそのsourceのメッセージだけを既読にする
+           （例: source="web" でWebからのメッセージのみ既読）
+    """
     _ensure_initialized()
     conn = _get_conn()
-    conn.execute(
-        "UPDATE phone_messages SET read_by_recipient = 1 WHERE sender = ? AND read_by_recipient = 0",
-        (sender,),
-    )
+    if source:
+        conn.execute(
+            "UPDATE phone_messages SET read_by_recipient = 1 WHERE sender = ? AND source = ? AND read_by_recipient = 0",
+            (sender, source),
+        )
+    else:
+        conn.execute(
+            "UPDATE phone_messages SET read_by_recipient = 1 WHERE sender = ? AND read_by_recipient = 0",
+            (sender,),
+        )
     conn.commit()
 
 
