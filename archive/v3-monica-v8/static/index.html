@@ -1,0 +1,720 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Monica — Autonomous AI Agent</title>
+<style>
+  :root {
+    --bg: #0d1117;
+    --bg2: #161b22;
+    --bg3: #21262d;
+    --border: #30363d;
+    --text: #e6edf3;
+    --text2: #8b949e;
+    --accent: #58a6ff;
+    --accent2: #3fb950;
+    --accent3: #d29922;
+    --accent4: #f85149;
+    --radius: 12px;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans JP', sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    height: 100vh;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+  }
+
+  /* Header */
+  .header {
+    background: var(--bg2);
+    border-bottom: 1px solid var(--border);
+    padding: 12px 24px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-shrink: 0;
+  }
+  .header h1 {
+    font-size: 18px;
+    font-weight: 600;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .header h1 .badge {
+    font-size: 11px;
+    font-weight: 400;
+    background: var(--bg3);
+    color: var(--text2);
+    padding: 2px 8px;
+    border-radius: 10px;
+    border: 1px solid var(--border);
+  }
+  .header-status {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    font-size: 13px;
+    color: var(--text2);
+  }
+  .status-dot {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    display: inline-block;
+    transition: background 0.3s;
+  }
+  .status-dot.idle { background: var(--text2); }
+  .status-dot.chat { background: var(--accent2); }
+  .status-dot.think { background: var(--accent3); }
+  @keyframes pulse-think {
+    0%, 100% { box-shadow: 0 0 4px var(--accent3); }
+    50% { box-shadow: 0 0 12px var(--accent3); }
+  }
+  .status-dot.think { animation: pulse-think 1s infinite; }
+  .status-dot.chat { animation: pulse-chat 1.5s infinite; }
+  @keyframes pulse-chat {
+    0%, 100% { box-shadow: 0 0 4px var(--accent2); }
+    50% { box-shadow: 0 0 10px var(--accent2); }
+  }
+
+  /* Main Layout */
+  .main {
+    display: flex;
+    flex: 1;
+    overflow: hidden;
+  }
+
+  /* Chat Panel */
+  .chat-panel {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+  }
+  .chat-messages {
+    flex: 1;
+    overflow-y: auto;
+    padding: 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    scroll-behavior: smooth;
+  }
+  .chat-messages::-webkit-scrollbar { width: 6px; }
+  .chat-messages::-webkit-scrollbar-track { background: transparent; }
+  .chat-messages::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+  .msg {
+    max-width: 85%;
+    padding: 12px 16px;
+    border-radius: var(--radius);
+    font-size: 14px;
+    line-height: 1.6;
+    animation: fadeIn 0.3s ease;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+  }
+  @keyframes fadeIn {
+    from { opacity: 0; transform: translateY(8px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  .msg.user {
+    align-self: flex-end;
+    background: var(--accent);
+    color: #fff;
+    border-bottom-right-radius: 4px;
+  }
+  .msg.assistant {
+    align-self: flex-start;
+    background: var(--bg3);
+    border: 1px solid var(--border);
+    border-bottom-left-radius: 4px;
+  }
+  .msg.system {
+    align-self: center;
+    background: transparent;
+    color: var(--text2);
+    font-size: 12px;
+    border: none;
+    text-align: center;
+    max-width: 100%;
+  }
+  .msg .timestamp {
+    font-size: 10px;
+    color: var(--text2);
+    margin-top: 4px;
+    opacity: 0.6;
+  }
+  .msg.user .timestamp { color: rgba(255,255,255,0.6); }
+  .msg.assistant .source-tag {
+    display: inline-block;
+    font-size: 10px;
+    padding: 1px 6px;
+    border-radius: 8px;
+    background: var(--bg);
+    color: var(--text2);
+    margin-right: 6px;
+  }
+  @keyframes blink {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.3; }
+  }
+  .msg.thinking {
+    align-self: flex-start;
+    background: var(--bg3);
+    border: 1px solid var(--accent3);
+    border-bottom-left-radius: 4px;
+  }
+  .msg.thinking .cursor { animation: blink 1s infinite; }
+
+  /* Input Area */
+  .chat-input {
+    padding: 16px 20px;
+    background: var(--bg2);
+    border-top: 1px solid var(--border);
+    display: flex;
+    gap: 8px;
+    flex-shrink: 0;
+  }
+  .chat-input input {
+    flex: 1;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px 14px;
+    color: var(--text);
+    font-size: 14px;
+    outline: none;
+    transition: border-color 0.2s;
+  }
+  .chat-input input:focus { border-color: var(--accent); }
+  .chat-input input::placeholder { color: var(--text2); }
+  .chat-input button {
+    background: var(--accent);
+    color: #fff;
+    border: none;
+    border-radius: 8px;
+    padding: 10px 20px;
+    font-size: 14px;
+    cursor: pointer;
+    transition: all 0.2s;
+    font-weight: 500;
+  }
+  .chat-input button:hover { background: #4090e0; transform: translateY(-1px); }
+  .chat-input button:active { transform: translateY(0); }
+  .chat-input button:disabled { opacity: 0.5; cursor: not-allowed; }
+
+  /* Status Panel */
+  .status-panel {
+    width: 320px;
+    background: var(--bg2);
+    border-left: 1px solid var(--border);
+    overflow-y: auto;
+    flex-shrink: 0;
+    padding: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+  .status-panel::-webkit-scrollbar { width: 4px; }
+  .status-panel::-webkit-scrollbar-track { background: transparent; }
+  .status-panel::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+  .status-card {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 14px;
+  }
+  .status-card h3 {
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--text2);
+    margin-bottom: 10px;
+  }
+  .metric-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+  }
+  .metric {
+    text-align: center;
+    padding: 8px;
+    border-radius: 6px;
+    background: var(--bg2);
+  }
+  .metric .value {
+    font-size: 20px;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+  }
+  .metric .label {
+    font-size: 10px;
+    color: var(--text2);
+    margin-top: 2px;
+  }
+  .metric.pe .value { color: var(--accent); }
+  .metric.kl .value { color: var(--accent3); }
+  .metric.vfe .value { color: var(--accent4); }
+  .metric.self .value { color: var(--accent2); }
+  .metric.drift .value { color: var(--accent3); }
+
+  .trend-row {
+    display: flex;
+    justify-content: space-between;
+    font-size: 12px;
+    color: var(--text2);
+    padding: 4px 0;
+    border-bottom: 1px solid var(--border);
+  }
+  .trend-row:last-child { border-bottom: none; }
+  .trend-row .up { color: var(--accent2); }
+  .trend-row .down { color: var(--accent4); }
+  .trend-row .flat { color: var(--text2); }
+
+  .info-row {
+    font-size: 13px;
+    padding: 4px 0;
+    display: flex;
+    justify-content: space-between;
+    color: var(--text);
+  }
+  .info-row .label { color: var(--text2); }
+  .info-row .value { max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  /* Think Log */
+  .think-log {
+    max-height: 200px;
+    overflow-y: auto;
+    font-size: 12px;
+    color: var(--text2);
+  }
+  .think-log::-webkit-scrollbar { width: 3px; }
+  .think-log .entry {
+    padding: 6px 0;
+    border-bottom: 1px solid var(--border);
+    line-height: 1.5;
+  }
+  .think-log .entry:last-child { border-bottom: none; }
+  .think-log .entry .tag {
+    display: inline-block;
+    font-size: 10px;
+    padding: 0 4px;
+    border-radius: 3px;
+    background: var(--bg3);
+    color: var(--accent3);
+    margin-right: 4px;
+  }
+
+  /* Goal Card */
+  .goal-active { color: var(--accent2); }
+  .goal-pending { color: var(--accent3); }
+
+  /* Responsive */
+  @media (max-width: 768px) {
+    .status-panel { display: none; }
+    .msg { max-width: 95%; }
+    .header-status { font-size: 11px; gap: 8px; }
+  }
+
+  /* Scrollbar for chat */
+  .chat-messages {
+    scrollbar-width: thin;
+    scrollbar-color: var(--border) transparent;
+  }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>
+    <span>⚡ Monica</span>
+    <span class="badge">v10 Phase 4 · Web</span>
+  </h1>
+  <div class="header-status">
+    <span id="modeIndicator">
+      <span class="status-dot idle" id="modeDot"></span>
+      <span id="modeText">IDLE</span>
+    </span>
+    <span>self: <strong id="headerSelf">0.300</strong></span>
+    <span>PE: <strong id="headerPE">0.000</strong></span>
+  </div>
+</div>
+
+<div class="main">
+  <div class="chat-panel">
+    <div class="chat-messages" id="chatMessages">
+      <div class="msg system">Monica v10 — Web UI started. Type a message to begin.</div>
+    </div>
+    <div class="chat-input">
+      <input type="text" id="chatInput" placeholder="Message Monica..." autofocus>
+      <button id="sendBtn" onclick="sendMessage()">Send</button>
+    </div>
+  </div>
+
+  <div class="status-panel" id="statusPanel">
+    <!-- FEP Metrics -->
+    <div class="status-card">
+      <h3>🔬 FEP Metrics</h3>
+      <div class="metric-grid">
+        <div class="metric pe">
+          <div class="value" id="fepPe">0.000</div>
+          <div class="label">PE (mid)</div>
+        </div>
+        <div class="metric kl">
+          <div class="value" id="fepKl">0.000</div>
+          <div class="label">KL</div>
+        </div>
+        <div class="metric vfe">
+          <div class="value" id="fepVfe">0.000</div>
+          <div class="label">VFE</div>
+        </div>
+        <div class="metric self">
+          <div class="value" id="fepSelf">0.300</div>
+          <div class="label">Self-Model</div>
+        </div>
+      </div>
+      <div style="margin-top:8px">
+        <div class="trend-row">
+          <span>PE Trend</span>
+          <span id="trendPe" class="flat">±0.000</span>
+        </div>
+        <div class="trend-row">
+          <span>KL Trend</span>
+          <span id="trendKl" class="flat">±0.000</span>
+        </div>
+        <div class="trend-row">
+          <span>VFE Trend</span>
+          <span id="trendVfe" class="flat">±0.000</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Agent State -->
+    <div class="status-card">
+      <h3>🧠 Agent State</h3>
+      <div class="info-row"><span class="label">Mode</span><span id="stateMode" class="value">IDLE</span></div>
+      <div class="info-row"><span class="label">Drift</span><span id="stateDrift" class="value">0.000</span></div>
+      <div class="info-row"><span class="label">Restoring</span><span id="stateRestore" class="value">0.0600</span></div>
+      <div class="info-row"><span class="label">Noise σ</span><span id="stateNoise" class="value">0.030</span></div>
+      <div class="info-row"><span class="label">Steer</span><span id="stateSteer" class="value">inactive</span></div>
+      <div class="info-row"><span class="label">Think #</span><span id="stateThinkCount" class="value">0</span></div>
+      <div class="info-row"><span class="label">Conv</span><span id="stateConvCount" class="value">0 msgs</span></div>
+      <div class="info-row"><span class="label">FEP History</span><span id="stateFepLen" class="value">0 pts</span></div>
+    </div>
+
+    <!-- Goal -->
+    <div class="status-card">
+      <h3>🎯 Active Goal</h3>
+      <div id="goalContent" style="font-size:13px;color:var(--text2)">None</div>
+    </div>
+
+    <!-- Focus -->
+    <div class="status-card">
+      <h3>🎯 Meta Focus</h3>
+      <div id="focusContent" style="font-size:13px;color:var(--text2)">—</div>
+    </div>
+
+    <!-- Profile -->
+    <div class="status-card">
+      <h3>👤 User Profile</h3>
+      <div id="profileContent" style="font-size:13px;color:var(--text2)">Not yet</div>
+    </div>
+
+    <!-- Think Log -->
+    <div class="status-card">
+      <h3>💭 Think Log</h3>
+      <div class="think-log" id="thinkLog">
+        <div class="entry" style="color:var(--text2)">Waiting for first THINK cycle...</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+// ── DOM refs ──
+const chatMessages = document.getElementById('chatMessages');
+const chatInput = document.getElementById('chatInput');
+const sendBtn = document.getElementById('sendBtn');
+const modeDot = document.getElementById('modeDot');
+const modeText = document.getElementById('modeText');
+const headerSelf = document.getElementById('headerSelf');
+const headerPE = document.getElementById('headerPE');
+
+// ── Send message ──
+async function sendMessage() {
+  const text = chatInput.value.trim();
+  if (!text) return;
+  chatInput.value = '';
+  chatInput.disabled = true;
+  sendBtn.disabled = true;
+
+  // Show user message
+  addMessage(text, 'user');
+  // Show thinking indicator
+  const thinkingId = addThinkingMessage();
+
+  try {
+    const resp = await fetch('/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message: text })
+    });
+    const data = await resp.json();
+    removeThinkingMessage(thinkingId);
+    if (data.response) {
+      addMessage(data.response, 'assistant', { source: 'api' });
+    } else if (data.error) {
+      addMessage(`⚠️ Error: ${data.error}`, 'system');
+    }
+  } catch (err) {
+    removeThinkingMessage(thinkingId);
+    addMessage(`⚠️ Connection error: ${err.message}`, 'system');
+  }
+
+  chatInput.disabled = false;
+  sendBtn.disabled = false;
+  chatInput.focus();
+}
+
+chatInput.addEventListener('keydown', e => {
+  if (e.key === 'Enter' && !e.shiftKey) {
+    e.preventDefault();
+    sendMessage();
+  }
+});
+
+// ── Message helpers ──
+function addMessage(text, role, extra = {}) {
+  const div = document.createElement('div');
+  div.className = `msg ${role}`;
+  let content = text;
+  // Link detection
+  content = content.replace(/(https?:\/\/[^\s]+)/g, '<a href="$1" target="_blank" style="color:var(--accent)">$1</a>');
+  // Code blocks
+  content = content.replace(/```(\w*)\n([\s\S]*?)```/g, '<pre style="background:var(--bg);padding:8px;border-radius:6px;overflow-x:auto;font-size:12px;margin:4px 0"><code>$2</code></pre>');
+  // Inline code
+  content = content.replace(/`([^`]+)`/g, '<code style="background:var(--bg);padding:1px 4px;border-radius:3px;font-size:12px">$1</code>');
+
+  if (role === 'assistant') {
+    const source = extra.source === 'local_fallback' ? '🔌 local' : '☁️ api';
+    div.innerHTML = `<span class="source-tag">${source}</span>${content}<div class="timestamp">${new Date().toLocaleTimeString()}</div>`;
+  } else if (role === 'user') {
+    div.innerHTML = `${content}<div class="timestamp">${new Date().toLocaleTimeString()}</div>`;
+  } else {
+    div.textContent = content;
+  }
+
+  chatMessages.appendChild(div);
+  chatMessages.scrollTop = chatMessages.scrollHeight;
+  return div;
+}
+
+let thinkingCount = 0;
+
+function addThinkingMessage() {
+  const id = `thinking-${++thinkingCount}`;
+  const div = document.createElement('div');
+  div.className = 'msg thinking';
+  div.id = id;
+  div.innerHTML = `<span class="cursor">⏳</span> Thinking<span class="cursor">...</span>`;
+  chatMessages.appendChild(div);
+  chatMessages.scrollTop = chatMessages.scrollHeight;
+  return id;
+}
+
+function removeThinkingMessage(id) {
+  const el = document.getElementById(id);
+  if (el) el.remove();
+}
+
+// ── SSE — EventSource ──
+const evtSource = new EventSource('/api/events');
+
+evtSource.onmessage = (event) => {
+  try {
+    const data = JSON.parse(event.data);
+    handleEvent(data);
+  } catch (e) {
+    // heartbeat or parse error
+  }
+};
+
+function handleEvent(data) {
+  const { type, ts } = data;
+
+  switch (type) {
+    case 'mode':
+      updateMode(data.to, data.self);
+      if (data.from !== data.to) {
+        addMessage(`🔄 Mode: ${data.from} → ${data.to}`, 'system');
+      }
+      break;
+
+    case 'user':
+      // Already shown optimistically
+      break;
+
+    case 'assistant':
+      // Already handled by fetch response
+      updateHeader(data.self);
+      break;
+
+    case 'think':
+      addThinkLogEntry(data);
+      updateThinkCount(data.count);
+      break;
+
+    case 'fep':
+      updateFepMetrics(data);
+      break;
+
+    case 'tool':
+      if (data.results && data.results.length) {
+        const toolText = data.results.map(r => `🔧 ${r.type}: ${r.target}`).join('\n');
+        addMessage(`🛠️ Tool used:\n${toolText}`, 'system');
+      }
+      break;
+
+    case 'goal':
+      updateGoal(data);
+      break;
+
+    case 'artifact':
+      if (data.files && data.files.length) {
+        const fileText = data.files.map(f => `📄 ${f.name} (${f.lang}, ${f.size}b)`).join('\n');
+        addMessage(`📦 Artifact created:\n${fileText}`, 'system');
+      }
+      break;
+
+    case 'status':
+      // Full state dump
+      break;
+
+    case 'system':
+      if (data.message) {
+        addMessage(`ℹ️ ${data.message}`, 'system');
+      }
+      break;
+  }
+}
+
+// ── State updaters ──
+function updateMode(newMode, selfVal) {
+  modeDot.className = `status-dot ${newMode.toLowerCase()}`;
+  modeText.textContent = newMode;
+  document.getElementById('stateMode').textContent = newMode;
+  if (selfVal !== undefined) {
+    headerSelf.textContent = selfVal.toFixed(3);
+    document.getElementById('fepSelf').textContent = selfVal.toFixed(3);
+  }
+}
+
+function updateHeader(selfVal) {
+  if (selfVal !== undefined) {
+    headerSelf.textContent = selfVal.toFixed(3);
+    document.getElementById('fepSelf').textContent = selfVal.toFixed(3);
+  }
+}
+
+function updateFepMetrics(data) {
+  if (data.pe !== undefined) {
+    document.getElementById('fepPe').textContent = data.pe.toFixed(3);
+    headerPE.textContent = data.pe.toFixed(3);
+  }
+  if (data.kl !== undefined) document.getElementById('fepKl').textContent = data.kl.toFixed(3);
+  if (data.vfe !== undefined) document.getElementById('fepVfe').textContent = data.vfe.toFixed(3);
+  if (data.self !== undefined) {
+    document.getElementById('fepSelf').textContent = data.self.toFixed(3);
+    headerSelf.textContent = data.self.toFixed(3);
+  }
+  if (data.drift !== undefined) document.getElementById('stateDrift').textContent = data.drift.toFixed(3);
+}
+
+function addThinkLogEntry(data) {
+  const log = document.getElementById('thinkLog');
+  const entry = document.createElement('div');
+  entry.className = 'entry';
+  const text = (data.text || '').substring(0, 100).replace(/\n/g, ' ');
+  entry.innerHTML = `<span class="tag">#${data.count || '?'}</span> ${text}...`;
+  log.appendChild(entry);
+  log.scrollTop = log.scrollHeight;
+  // Keep last 20 entries
+  while (log.children.length > 20) log.removeChild(log.firstChild);
+}
+
+function updateThinkCount(count) {
+  document.getElementById('stateThinkCount').textContent = count || 0;
+}
+
+function updateGoal(data) {
+  const el = document.getElementById('goalContent');
+  if (data && data.desc) {
+    const statusClass = data.status === 'in_progress' || data.status === 'active' ? 'goal-active' : 'goal-pending';
+    el.innerHTML = `<span class="${statusClass}">#${data.id} [${data.status}]</span><br>${data.desc}`;
+  } else {
+    el.textContent = 'None';
+  }
+}
+
+// ── Poll /api/state every 5s for full state sync ──
+async function pollState() {
+  try {
+    const resp = await fetch('/api/state');
+    const state = await resp.json();
+
+    document.getElementById('stateDrift').textContent = (state.self_drift || 0).toFixed(3);
+    document.getElementById('stateRestore').textContent = (state.restoring || 0).toFixed(4);
+    document.getElementById('stateNoise').textContent = (state.noise_std || 0).toFixed(3);
+    document.getElementById('stateSteer').textContent = state.steer_ready ? `✅ active (${state.steer_samples}s)` : '❌ inactive';
+    document.getElementById('stateConvCount').textContent = `${state.conv_count || 0} msgs`;
+    document.getElementById('stateFepLen').textContent = `${state.fep_history_len || 0} pts`;
+    document.getElementById('stateMode').textContent = state.mode || 'IDLE';
+
+    if (state.meta_focus) {
+      document.getElementById('focusContent').textContent = state.meta_focus;
+    }
+
+    // Profile
+    const profileEl = document.getElementById('profileContent');
+    if (state.profile && state.profile.name) {
+      profileEl.innerHTML = `👤 ${state.profile.name} · ${state.profile.interaction_count} interactions`;
+    }
+
+    // Trend
+    if (state.fep_trend) {
+      const setTrend = (id, val) => {
+        const el = document.getElementById(id);
+        if (!el) return;
+        const cls = val > 0.001 ? 'up' : val < -0.001 ? 'down' : 'flat';
+        el.className = cls;
+        el.textContent = (val > 0 ? '+' : '') + val.toFixed(3);
+      };
+      setTrend('trendPe', state.fep_trend.pe);
+      setTrend('trendKl', state.fep_trend.kl);
+      setTrend('trendVfe', state.fep_trend.vfe);
+    }
+
+    // Goal
+    if (state.goal) updateGoal(state.goal);
+    if (state.think_count !== undefined) document.getElementById('stateThinkCount').textContent = state.think_count;
+  } catch (e) {
+    // silent
+  }
+}
+
+setInterval(pollState, 3000);
+pollState();
+
+// ── Initial focus ──
+chatInput.focus();
+</script>
+</body>
+</html>

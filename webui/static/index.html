@@ -1,0 +1,666 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>lucina-NA</title>
+<style>
+:root {
+  --bg: #0d1117;
+  --surface: #161b22;
+  --border: #30363d;
+  --text: #c9d1d9;
+  --muted: #8b949e;
+  --accent: #58a6ff;
+  --green: #3fb950;
+  --yellow: #d29922;
+  --red: #f85149;
+  --purple: #bc8cff;
+}
+* { margin:0; padding:0; box-sizing:border-box; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+  background: var(--bg); color: var(--text); height: 100vh; overflow: hidden;
+}
+.app { display: flex; flex-direction: column; height: 100vh; }
+
+/* ── Header ── */
+.header {
+  display: flex; align-items: center; gap: 16px;
+  padding: 8px 20px; background: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
+.header h1 { font-size: 16px; font-weight: 600; }
+.header .badge { font-size: 11px; padding: 2px 8px; border-radius: 10px;
+  background: var(--accent); color: #fff; }
+
+/* ── Tabs ── */
+.tabs { display: flex; gap: 0; padding: 0 12px; background: var(--surface);
+  border-bottom: 1px solid var(--border); }
+.tab { padding: 10px 18px; cursor: pointer; font-size: 13px; color: var(--muted);
+  border-bottom: 2px solid transparent; transition: all .15s;
+  user-select: none; }
+.tab:hover { color: var(--text); }
+.tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+.tab .count { margin-left: 6px; font-size: 11px; padding: 0 6px;
+  background: var(--border); border-radius: 8px; }
+
+/* ── Panels ── */
+.panels { flex: 1; overflow: hidden; }
+.panel { display: none; height: 100%; overflow-y: auto; padding: 16px 20px; }
+.panel.active { display: flex; flex-direction: column; }
+
+/* ── Scrollbar ── */
+::-webkit-scrollbar { width: 8px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+
+/* ── Chat ── */
+.chat-area { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 12px; padding-bottom: 12px; }
+.message { max-width: 85%; padding: 10px 14px; border-radius: 12px; font-size: 14px; line-height: 1.5; }
+.message.user { align-self: flex-end; background: var(--accent); color: #fff; }
+.message.agent { align-self: flex-start; background: var(--surface); border: 1px solid var(--border); }
+.message.system { align-self: center; background: transparent; color: var(--muted); font-size: 12px; }
+.message.thinking { align-self: flex-start; background: var(--surface); border-color: var(--yellow); font-size: 12px; color: var(--muted); }
+.message .msg-label { font-size: 11px; font-weight: 600; margin-bottom: 4px; }
+.message .msg-tools { margin-top: 6px; font-size: 12px; color: var(--purple); }
+.message .msg-tools li { margin-left: 16px; }
+.chat-input-area { display: flex; gap: 8px; padding-top: 12px; border-top: 1px solid var(--border); }
+.chat-input { flex: 1; padding: 10px 14px; border: 1px solid var(--border); border-radius: 8px;
+  background: var(--surface); color: var(--text); font-size: 14px; outline: none; }
+.chat-input:focus { border-color: var(--accent); }
+.chat-send { padding: 10px 20px; border: none; border-radius: 8px;
+  background: var(--accent); color: #fff; font-size: 14px; cursor: pointer; }
+.chat-send:disabled { opacity: .5; cursor: default; }
+
+/* ── Status ── */
+.status-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 16px; }
+.card h3 { font-size: 13px; color: var(--muted); margin-bottom: 10px; text-transform: uppercase; letter-spacing: .5px; }
+.drive-bar { margin-bottom: 8px; }
+.drive-bar .label { display: flex; justify-content: space-between; font-size: 12px; margin-bottom: 3px; }
+.drive-bar .bar { height: 8px; background: var(--border); border-radius: 4px; overflow: hidden; }
+.drive-bar .fill { height: 100%; border-radius: 4px; transition: width .5s; }
+.stat-row { display: flex; justify-content: space-between; font-size: 13px; padding: 4px 0; }
+.stat-row .val { color: var(--accent); }
+.env-row { display: flex; justify-content: space-between; font-size: 13px; padding: 4px 0; }
+
+/* ── Memory ── */
+.memory-controls { display: flex; gap: 12px; margin-bottom: 12px; align-items: center; }
+.memory-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.memory-table th { text-align: left; color: var(--muted); padding: 6px 8px;
+  border-bottom: 1px solid var(--border); font-weight: 500; }
+.memory-table td { padding: 6px 8px; border-bottom: 1px solid var(--border); }
+.memory-table tr:hover { background: var(--surface); }
+.imp-bar { display: inline-block; height: 6px; width: 60px; background: var(--border); border-radius: 3px; vertical-align: middle; }
+.imp-fill { height: 100%; border-radius: 3px; }
+
+/* ── Logs ── */
+.log-toolbar { display: flex; gap: 8px; margin-bottom: 12px; }
+.log-toolbar input { flex: 1; padding: 6px 10px; border: 1px solid var(--border);
+  border-radius: 6px; background: var(--surface); color: var(--text); font-size: 12px; }
+.log-area { flex: 1; overflow-y: auto; font-family: 'JetBrains Mono', 'Cascadia Code', 'SF Mono', monospace; font-size: 12px; }
+.log-line { padding: 2px 8px; white-space: pre-wrap; word-break: break-all; }
+.log-line:hover { background: var(--surface); }
+.log-line .lt { color: var(--muted); margin-right: 8px; }
+.log-line .ln { color: var(--yellow); margin-right: 8px; }
+.log-line .ll { font-weight: 600; margin-right: 8px; }
+.log-line.level-ERROR { color: var(--red); }
+.log-line.level-WARNING { color: var(--yellow); }
+.log-line.level-INFO { color: var(--text); }
+.log-line.filtered { display: none; }
+
+/* ── Plan ── */
+.plan-grid { display: grid; grid-template-columns: 2fr 1fr; gap: 16px; }
+.goal-item { padding: 8px 0; border-bottom: 1px solid var(--border); }
+.goal-item:last-child { border-bottom: none; }
+.goal-item .goal-text { font-size: 13px; }
+.goal-item .goal-meta { display: flex; gap: 16px; font-size: 11px; color: var(--muted); margin-top: 3px; }
+.progress-bar { display: inline-block; height: 6px; width: 80px; background: var(--border); border-radius: 3px; vertical-align: middle; }
+.routine-item { padding: 6px 0; font-size: 13px; border-bottom: 1px solid var(--border); }
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="header">
+    <h1>lucina-NA</h1>
+    <span class="badge">gemma4:e4b</span>
+    <span style="font-size:12px;color:var(--muted);margin-left:auto" id="daemon-badge">デーモン: --</span>
+  </div>
+
+  <div class="tabs" id="tabs">
+    <div class="tab active" data-tab="chat">チャット</div>
+    <div class="tab" data-tab="status">状態</div>
+    <div class="tab" data-tab="pipeline">パイプライン</div>
+    <div class="tab" data-tab="memory">記憶 <span class="count" id="memory-count">0</span></div>
+    <div class="tab" data-tab="logs">ログ</div>
+    <div class="tab" data-tab="plan">計画</div>
+  </div>
+
+  <div class="panels">
+    <!-- Chat -->
+    <div class="panel active" id="panel-chat">
+      <div class="chat-area" id="chat-area"></div>
+      <div class="chat-input-area">
+        <input class="chat-input" id="chat-input" placeholder="メッセージを入力..." />
+        <button class="chat-send" id="chat-send">送信</button>
+        <span style="font-size:11px;color:var(--muted);align-self:center">IPC</span>
+      </div>
+    </div>
+
+    <!-- Status -->
+    <div class="panel" id="panel-status">
+      <div class="status-grid">
+        <div class="card" id="card-drives"><h3>駆動値</h3></div>
+        <div class="card" id="card-personality"><h3>パーソナリティ</h3></div>
+        <div class="card" id="card-environment"><h3>環境</h3></div>
+        <div class="card" id="card-memory"><h3>記憶</h3></div>
+        <div class="card" id="card-ratelimit"><h3>行動エネルギー</h3></div>
+      </div>
+    </div>
+
+    <!-- Pipeline (detailed cycle view) -->
+    <div class="panel" id="panel-pipeline">
+      <div style="margin-bottom:12px;display:flex;gap:8px;align-items:center">
+        <span id="cycle-phase" style="font-size:13px;color:var(--muted)"></span>
+        <span id="cycle-time" style="font-size:12px;color:var(--muted)"></span>
+        <span style="flex:1"></span>
+        <button class="chat-send" style="padding:6px 16px;font-size:12px" id="cycle-refresh">更新</button>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px" id="cycle-grid">
+        <!-- Drive -->
+        <div class="card" id="cycle-drives"><h3>駆動値</h3></div>
+        <!-- Decision -->
+        <div class="card" id="cycle-decision"><h3>判断</h3></div>
+        <!-- Plan -->
+        <div class="card" id="cycle-plan" style="grid-column:1/-1"><h3>計画</h3></div>
+        <!-- Result -->
+        <div class="card" id="cycle-result" style="grid-column:1/-1"><h3>結果</h3></div>
+        <!-- Evaluation & Learning (Phase 2 only) -->
+        <div class="card" id="cycle-evaluation"><h3>評価</h3></div>
+        <div class="card" id="cycle-learning"><h3>学習</h3></div>
+      </div>
+      <div id="cycle-empty" style="text-align:center;padding:40px;color:var(--muted);font-size:14px">
+        サイクルデータがありません<br>
+        デーモンを起動すると自動的に表示されます
+      </div>
+    </div>
+
+    <!-- Memory -->
+    <div class="panel" id="panel-memory">
+      <div class="memory-controls">
+        <label style="font-size:13px">表示数:
+          <select id="mem-topk" style="background:var(--surface);color:var(--text);border:1px solid var(--border);padding:4px 8px;border-radius:6px">
+            <option>20</option><option selected>50</option><option>100</option><option>200</option>
+          </select>
+        </label>
+        <label style="font-size:13px">最低重要度:
+          <input type="range" id="mem-min-imp" min="0" max="1" step="0.1" value="0" style="vertical-align:middle" />
+          <span id="mem-min-imp-val" style="font-size:12px;color:var(--muted)">0.0</span>
+        </label>
+        <button class="chat-send" style="padding:6px 16px;font-size:12px" id="mem-refresh">更新</button>
+      </div>
+      <table class="memory-table"><thead><tr>
+        <th>時刻</th><th>出来事</th><th>重要度</th><th>タグ</th><th>結果</th>
+      </tr></thead><tbody id="memory-body"></tbody></table>
+    </div>
+
+    <!-- Logs -->
+    <div class="panel" id="panel-logs">
+      <div class="log-toolbar">
+        <input id="log-filter" placeholder="フィルタ (例: Agent, ERROR, Planning...)" />
+        <span style="font-size:12px;color:var(--muted)">🔴 realtime</span>
+      </div>
+      <div class="log-area" id="log-area"></div>
+    </div>
+
+    <!-- Plan -->
+    <div class="panel" id="panel-plan">
+      <div class="plan-grid">
+        <div class="card"><h3>目標</h3><div id="plan-goals"></div></div>
+        <div class="card"><h3>ルーティン</h3><div id="plan-routines"></div></div>
+      </div>
+      <div class="card" style="margin-top:16px"><h3>アイデンティティ方針</h3><div id="plan-policy" style="font-size:13px;color:var(--muted)"></div></div>
+    </div>
+  </div>
+</div>
+
+<script>
+// ── Tab switching ──
+document.querySelectorAll('.tab').forEach(tab => {
+  tab.addEventListener('click', () => {
+    document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+    document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+    tab.classList.add('active');
+    document.getElementById('panel-' + tab.dataset.tab).classList.add('active');
+    if (tab.dataset.tab === 'logs') scrollLogs();
+  });
+});
+
+// ── WebSocket Chat ──
+const chatArea = document.getElementById('chat-area');
+const chatInput = document.getElementById('chat-input');
+const chatSend = document.getElementById('chat-send');
+let ws = null;
+
+function addMessage(kind, text, extra) {
+  const div = document.createElement('div');
+  div.className = 'message ' + kind;
+  let html = '';
+  if (kind === 'agent' || kind === 'user') {
+    html += '<div class="msg-label">' + (kind === 'agent' ? 'Lucina' : 'あなた') + '</div>';
+  }
+  html += text;
+  if (extra && extra.steps) {
+    html += '<ul class="msg-tools">' + extra.steps.map(s => '<li>' + escapeHtml(s) + '</li>').join('') + '</ul>';
+  }
+  div.innerHTML = html;
+  chatArea.appendChild(div);
+  chatArea.scrollTop = chatArea.scrollHeight;
+}
+
+function escapeHtml(s) {
+  const d = document.createElement('div');
+  d.textContent = s;
+  return d.innerHTML;
+}
+
+function connectWs() {
+  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  ws = new WebSocket(proto + '//' + location.host + '/ws/chat');
+  ws.onopen = () => { chatSend.disabled = false; };
+  ws.onclose = () => {
+    chatSend.disabled = true;
+    addMessage('system', '⚠ 接続が切れました。ページを再読み込みして再試行してください。');
+    setTimeout(connectWs, 3000);
+  };
+  ws.onmessage = (e) => {
+    const data = JSON.parse(e.data);
+    switch (data.kind) {
+      case 'user':
+        addMessage('user', escapeHtml(data.text));
+        break;
+      case 'agent':
+        addMessage('agent', escapeHtml(data.text));
+        break;
+      case 'thinking':
+        addMessage('thinking', escapeHtml(data.label), data);
+        break;
+      case 'error':
+        addMessage('system', '⚠️ ' + escapeHtml(data.text));
+        break;
+    }
+  };
+}
+
+function sendChat() {
+  const text = chatInput.value.trim();
+  if (!text || !ws || ws.readyState !== WebSocket.OPEN) return;
+  ws.send(JSON.stringify({message: text}));
+  chatInput.value = '';
+}
+
+chatSend.addEventListener('click', sendChat);
+chatInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') sendChat(); });
+
+connectWs();
+
+// ── Status polling ──
+setInterval(async () => {
+  try {
+    const r = await fetch('/api/status');
+    const data = await r.json();
+
+    // Daemon badge
+    document.getElementById('daemon-badge').textContent =
+      data.daemon ? 'デーモン: 起動中' : 'デーモン: 停止';
+
+    // Drives
+    const driveColors = {exploration: '#58a6ff', social: '#bc8cff', achievement: '#3fb950', rest: '#d29922', maintenance: '#f85149'};
+    let driveHtml = '';
+    for (const [name, val] of Object.entries(data.drives || {})) {
+      const pct = Math.round(val * 100);
+      driveHtml += '<div class="drive-bar"><div class="label"><span>' + name + '</span><span>' + pct + '%</span></div>' +
+        '<div class="bar"><div class="fill" style="width:' + pct + '%;background:' + (driveColors[name] || '#58a6ff') + '"></div></div></div>';
+    }
+    document.querySelector('#card-drives').innerHTML = '<h3>駆動値 <span style="font-size:12px;color:var(--muted);text-transform:none;letter-spacing:0">→ ' + (data.primary_drive || '') + '</span></h3>' + driveHtml;
+
+    // Personality
+    const p = data.personality || {};
+    document.querySelector('#card-personality').innerHTML =
+      '<h3>パーソナリティ</h3>' +
+      '<div class="stat-row"><span>名前</span><span class="val">' + (p.name || 'Lucina') + '</span></div>' +
+      '<div class="stat-row"><span>ムード</span><span class="val">' + (p.mood || 'neutral') + '</span></div>' +
+      '<div class="stat-row"><span>信頼度</span><span class="val">' + (p.trust || 0) + '</span></div>' +
+      '<div class="stat-row"><span>親密度</span><span class="val">' + (p.familiarity || 0) + '</span></div>';
+
+    // Environment
+    const e = data.env || {};
+    document.querySelector('#card-environment').innerHTML =
+      '<h3>環境</h3>' +
+      (e.cpu !== undefined ? '<div class="env-row"><span>CPU</span><span>' + e.cpu + '%</span></div>' : '') +
+      (e.memory !== undefined ? '<div class="env-row"><span>メモリ</span><span>' + Math.round(e.memory) + '%</span></div>' : '') +
+      (e.network !== undefined ? '<div class="env-row"><span>ネットワーク</span><span>' + e.network + '</span></div>' : '') +
+      (!e.cpu && !e.memory ? '<div style="color:var(--muted);font-size:12px">データ待ち...</div>' : '');
+
+    // Memory stats
+    const m = data.memory || {};
+    document.querySelector('#card-memory').innerHTML =
+      '<h3>記憶</h3>' +
+      '<div class="stat-row"><span>エピソード数</span><span class="val">' + (m.episodes || 0) + '</span></div>' +
+      '<div class="stat-row"><span>平均重要度</span><span class="val">' + (m.avg_importance || 0) + '</span></div>';
+    document.getElementById('memory-count').textContent = m.episodes || 0;
+
+    // Rate limit (actionable energy)
+    const rl = data.rate_limit || {};
+    const max = rl.max || 10;
+    const remaining = rl.remaining !== undefined ? rl.remaining : max;
+    const resetIn = rl.reset_in || 0;
+    const pct = Math.round(remaining / max * 100);
+    document.querySelector('#card-ratelimit').innerHTML =
+      '<h3>行動エネルギー <span style="font-size:12px;color:var(--muted);text-transform:none;letter-spacing:0">' + remaining + '/' + max + '</span></h3>' +
+      '<div class="drive-bar"><div class="bar"><div class="fill" style="width:' + pct + '%;background:var(--accent)"></div></div></div>' +
+      '<div class="stat-row"><span>残り</span><span class="val">' + remaining + '</span></div>' +
+      '<div class="stat-row"><span>リセットまで</span><span class="val">' + resetIn + 's</span></div>';
+  } catch (e) { /* ignore */ }
+}, 3000);
+
+// ── Plan polling ──
+setInterval(async () => {
+  try {
+    const r = await fetch('/api/plan');
+    const data = await r.json();
+    if (data.error) return;
+
+    const goals = data.goals || [];
+    let ghtml = goals.length ? '' : '<div style="color:var(--muted);font-size:12px">目標なし</div>';
+    for (const g of goals) {
+      const pct = Math.round((g.progress || 0) * 100);
+      ghtml += '<div class="goal-item"><div class="goal-text">' + escapeHtml(g.goal) + '</div>' +
+        '<div class="goal-meta"><span>進捗: <div class="progress-bar"><div class="imp-fill" style="width:' + pct + '%;background:var(--green)"></div></div> ' + pct + '%</span>' +
+        '<span>優先度: ' + (g.priority || '中') + '</span></div></div>';
+    }
+    document.getElementById('plan-goals').innerHTML = ghtml;
+
+    const routines = data.routines || [];
+    let rhtml = routines.length ? '' : '<div style="color:var(--muted);font-size:12px">ルーティンなし</div>';
+    for (const r of routines) {
+      rhtml += '<div class="routine-item">' + escapeHtml(r.name) + ' — ' + escapeHtml(r.description) + ' <span style="color:var(--muted)">(' + r.interval_hours + 'h)</span></div>';
+    }
+    document.getElementById('plan-routines').innerHTML = rhtml;
+
+    document.getElementById('plan-policy').textContent = data.identity_policy || '（未設定）';
+  } catch (e) { /* ignore */ }
+}, 5000);
+
+// ── Memory refresh ──
+async function loadMemory() {
+  const topk = document.getElementById('mem-topk').value;
+  const minImp = document.getElementById('mem-min-imp').value;
+  try {
+    const r = await fetch('/api/memory?top_k=' + topk + '&min_importance=' + minImp);
+    const data = await r.json();
+    const tbody = document.getElementById('memory-body');
+    tbody.innerHTML = '';
+    for (const ep of data.episodes || []) {
+      const pct = Math.round(ep.importance * 100);
+      const tr = document.createElement('tr');
+      tr.innerHTML = '<td style="font-size:11px;color:var(--muted)">' + escapeHtml(ep.time.slice(5, 19)) + '</td>' +
+        '<td>' + escapeHtml(ep.event) + '</td>' +
+        '<td><div class="imp-bar"><div class="imp-fill" style="width:' + pct + '%;background:' + (pct > 60 ? 'var(--green)' : pct > 30 ? 'var(--yellow)' : 'var(--red)') + '"></div></div> ' + ep.importance + '</td>' +
+        '<td style="font-size:11px;color:var(--muted)">' + (ep.tags || []).join(', ') + '</td>' +
+        '<td style="font-size:11px">' + escapeHtml(ep.result) + '</td>';
+      tbody.appendChild(tr);
+    }
+    if (!data.episodes.length) {
+      tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;color:var(--muted);padding:24px">エピソードなし</td></tr>';
+    }
+  } catch (e) { /* ignore */ }
+}
+document.getElementById('mem-refresh').addEventListener('click', loadMemory);
+document.getElementById('mem-min-imp').addEventListener('input', (e) => {
+  document.getElementById('mem-min-imp-val').textContent = e.target.value;
+});
+setInterval(loadMemory, 10000);
+setTimeout(loadMemory, 500);
+
+// ── SSE real-time logs ──
+const logArea = document.getElementById('log-area');
+const logFilter = document.getElementById('log-filter');
+let logBuffer = [];
+
+function addLogLine(entry) {
+  logBuffer.push(entry);
+  if (logBuffer.length > 200) logBuffer.shift();
+  renderLogs();
+}
+
+function renderLogs() {
+  const filter = logFilter.value.toLowerCase();
+  logArea.innerHTML = logBuffer.map(e => {
+    const show = !filter || e.msg.toLowerCase().includes(filter);
+    return '<div class="log-line level-' + e.level + (show ? '' : ' filtered') + '">' +
+      '<span class="lt">' + escapeHtml(e.time) + '</span>' +
+      '<span class="ln">[' + escapeHtml(e.name) + ']</span>' +
+      '<span class="ll">' + e.level + '</span>' +
+      escapeHtml(e.msg.slice(e.msg.indexOf('] ') + 2)) + '</div>';
+  }).join('');
+  if (!filter) scrollLogs();
+}
+
+function scrollLogs() {
+  logArea.scrollTop = logArea.scrollHeight;
+}
+
+logFilter.addEventListener('input', renderLogs);
+
+// Load initial log history from file (daemon's logs)
+async function loadInitialLogs() {
+  try {
+    const r = await fetch('/api/logs?lines=100');
+    const data = await r.json();
+    for (const line of (data.logs || [])) {
+      // Parse the log line format: "2026-07-28 21:47:33,617 [Main] INFO: message"
+      var match = line.match(/^([\d-]+ [\d:,]+) \[(\w+)\] (\w+): (.+)$/);
+      if (match) {
+        addLogLine({
+          time: match[1].slice(5, 19),  // "07-28 21:47:33"
+          name: match[2],
+          level: match[3],
+          msg: '[' + match[2] + '] ' + match[3] + ': ' + match[4],
+        });
+      } else if (line.trim()) {
+        addLogLine({
+          time: '',
+          name: 'System',
+          level: 'INFO',
+          msg: line.trim(),
+        });
+      }
+    }
+  } catch (e) { /* ignore */ }
+}
+
+// Start SSE stream for live logs
+const evtSource = new EventSource('/stream/logs');
+evtSource.onmessage = (e) => {
+  try { addLogLine(JSON.parse(e.data)); }
+  catch (err) { /* ignore parse errors */ }
+};
+
+// Load initial log history after a short delay
+setTimeout(loadInitialLogs, 300);
+
+// ── Pipeline cycle polling ──
+let lastCycleTs = '';
+
+function renderCycle(data) {
+  const grid = document.getElementById('cycle-grid');
+  const empty = document.getElementById('cycle-empty');
+  
+  if (!data || data.error || !data.cycle) {
+    grid.style.display = 'none';
+    empty.style.display = 'block';
+    return;
+  }
+  grid.style.display = '';
+  empty.style.display = 'none';
+  
+  const c = data.cycle;
+  document.getElementById('cycle-phase').textContent = '[' + (c.phase || '?') + ']';
+  document.getElementById('cycle-time').textContent = c.timestamp || '';
+  
+  // Drives
+  const driveColors = {exploration: '#58a6ff', social: '#bc8cff', achievement: '#3fb950', rest: '#d29922', maintenance: '#f85149'};
+  let dh = '';
+  if (c.drive) {
+    for (const [name, val] of Object.entries(c.drive.drives || {})) {
+      const pct = Math.round(val * 100);
+      dh += '<div class="drive-bar"><div class="label"><span>' + name + '</span><span>' + pct + '%</span></div>' +
+        '<div class="bar"><div class="fill" style="width:' + pct + '%;background:' + (driveColors[name] || '#58a6ff') + '"></div></div></div>';
+    }
+    dh += '<div class="stat-row"><span>主駆動</span><span class="val">' + (c.drive.primary || '') + '</span></div>';
+    dh += '<div class="stat-row"><span>緊張</span><span class="val">' + (c.drive.tension || 0) + '</span></div>';
+    dh += '<div class="stat-row"><span>新奇性</span><span class="val">' + (c.drive.novelty || 0) + '</span></div>';
+  }
+  document.getElementById('cycle-drives').innerHTML = '<h3>駆動値</h3>' + dh;
+  
+  // Decision
+  let dech = '';
+  if (c.decision) {
+    dech += '<div class="stat-row"><span>目標</span></div><div style="font-size:13px;margin-bottom:8px">' + escapeHtml(c.decision.goal || '') + '</div>';
+    dech += '<div class="stat-row"><span>方針</span></div><div style="font-size:12px;color:var(--muted);margin-bottom:8px">' + escapeHtml(c.decision.action_policy || '') + '</div>';
+    dech += '<div class="stat-row"><span>優先度</span><span class="val">' + (c.decision.priority || '-') + '/5</span></div>';
+    dech += '<div class="stat-row"><span>直接実行</span><span class="val">' + (c.decision.direct_mode ? 'true' : 'false') + '</span></div>';
+    if (c.decision.conversation_intent) {
+      dech += '<div class="stat-row"><span>会話意図</span><span class="val">' + escapeHtml(c.decision.conversation_intent) + '</span></div>';
+    }
+  }
+  document.getElementById('cycle-decision').innerHTML = '<h3>判断</h3>' + dech;
+  
+  // Plan
+  let plh = '';
+  if (c.plan && c.plan.steps && c.plan.steps.length) {
+    plh += '<div style="font-size:12px;margin-bottom:6px">' + escapeHtml(c.plan.plan_id || '') + ' — ' + escapeHtml(c.plan.expected_outcome || '') + '</div>';
+    plh += '<table style="width:100%;border-collapse:collapse;font-size:12px"><thead><tr>' +
+      '<th style="text-align:left;color:var(--muted);padding:4px 8px;border-bottom:1px solid var(--border)">#</th>' +
+      '<th style="text-align:left;color:var(--muted);padding:4px 8px;border-bottom:1px solid var(--border)">アクション</th>' +
+      '<th style="text-align:left;color:var(--muted);padding:4px 8px;border-bottom:1px solid var(--border)">実行方式</th>' +
+      '<th style="text-align:left;color:var(--muted);padding:4px 8px;border-bottom:1px solid var(--border)">説明</th>' +
+      '<th style="text-align:right;color:var(--muted);padding:4px 8px;border-bottom:1px solid var(--border)">タイムアウト</th></tr></thead><tbody>';
+    for (const s of c.plan.steps) {
+      var execBadge = (s.executor === 'opencode') ? '<span style="display:inline-block;padding:1px 6px;border-radius:4px;font-size:10px;background:var(--purple);color:#fff">Opencode</span>' : '<span style="display:inline-block;padding:1px 6px;border-radius:4px;font-size:10px;background:var(--green);color:#fff">Direct</span>';
+      var paramsHtml = '';
+      if (s.params && Object.keys(s.params).length) {
+        paramsHtml = '<div style="margin-top:4px;padding:4px 6px;background:rgba(0,0,0,0.2);border-radius:4px">';
+        for (var pk in s.params) {
+          paramsHtml += '<div style="font-size:11px;color:var(--muted)"><span style="color:var(--yellow)">' + escapeHtml(pk) + ':</span> ' + escapeHtml(String(s.params[pk])) + '</div>';
+        }
+        paramsHtml += '</div>';
+      }
+      plh += '<tr><td style="padding:4px 8px;border-bottom:1px solid var(--border);vertical-align:top">' + s.order + '</td>' +
+        '<td style="padding:4px 8px;border-bottom:1px solid var(--border);vertical-align:top"><span style="color:var(--accent)">' + escapeHtml(s.action) + '</span></td>' +
+        '<td style="padding:4px 8px;border-bottom:1px solid var(--border);vertical-align:top">' + execBadge + '</td>' +
+        '<td style="padding:4px 8px;border-bottom:1px solid var(--border);vertical-align:top">' + escapeHtml(s.description || '') + paramsHtml + '</td>' +
+        '<td style="padding:4px 8px;border-bottom:1px solid var(--border);text-align:right;vertical-align:top">' + (s.timeout || '-') + 's</td></tr>';
+    }
+    plh += '</tbody></table>';
+  } else {
+    plh = '<div style="color:var(--muted);font-size:12px">（会話 — ツール実行なし）</div>';
+  }
+  document.getElementById('cycle-plan').innerHTML = '<h3>計画 <span style="font-size:12px;color:var(--muted);text-transform:none;letter-spacing:0">' + (c.plan ? (c.plan.steps || []).length + ' ステップ' : '') + '</span></h3>' + plh;
+  
+  // Result
+  let resh = '';
+  if (c.result) {
+    const success = c.result.overall_success;
+    resh += '<div class="stat-row"><span>総合</span><span class="val" style="color:' + (success ? 'var(--green)' : 'var(--red)') + '">' + (success ? '成功' : '失敗') + '</span></div>';
+    resh += '<div class="stat-row"><span>実行時間</span><span class="val">' + (c.result.execution_time || 0) + 's</span></div>';
+    if (c.result.step_results && c.result.step_results.length) {
+      resh += '<table style="width:100%;border-collapse:collapse;font-size:12px;margin-top:8px"><thead><tr>' +
+        '<th style="text-align:left;color:var(--muted);padding:4px 8px;border-bottom:1px solid var(--border)">#</th>' +
+        '<th style="text-align:left;color:var(--muted);padding:4px 8px;border-bottom:1px solid var(--border)">アクション</th>' +
+        '<th style="text-align:left;color:var(--muted);padding:4px 8px;border-bottom:1px solid var(--border)">実行方式</th>' +
+        '<th style="text-align:left;color:var(--muted);padding:4px 8px;border-bottom:1px solid var(--border)">結果</th>' +
+        '<th style="text-align:right;color:var(--muted);padding:4px 8px;border-bottom:1px solid var(--border)">時間</th></tr></thead><tbody>';
+      for (const sr of c.result.step_results) {
+        const ok = sr.success !== false;
+        var execBadge2 = (sr.executor === 'opencode') ? '<span style="display:inline-block;padding:1px 6px;border-radius:4px;font-size:10px;background:var(--purple);color:#fff">Opencode</span>' : '<span style="display:inline-block;padding:1px 6px;border-radius:4px;font-size:10px;background:var(--green);color:#fff">Direct</span>';
+        var outputHtml = '';
+        if (sr.output && sr.output.length > 0) {
+          var truncated = sr.output.length > 120 ? sr.output.slice(0, 120) + '...' : sr.output;
+          outputHtml = '<div style="margin-top:3px;padding:3px 6px;background:rgba(0,0,0,0.2);border-radius:4px;font-size:11px;color:var(--muted);max-width:400px;overflow:hidden;text-overflow:ellipsis">' + escapeHtml(truncated) + '</div>';
+        }
+        resh += '<tr><td style="padding:4px 8px;border-bottom:1px solid var(--border);vertical-align:top">' + (sr.order || '-') + '</td>' +
+          '<td style="padding:4px 8px;border-bottom:1px solid var(--border);vertical-align:top"><span style="color:var(--accent)">' + escapeHtml(sr.action || '') + '</span></td>' +
+          '<td style="padding:4px 8px;border-bottom:1px solid var(--border);vertical-align:top">' + execBadge2 + '</td>' +
+          '<td style="padding:4px 8px;border-bottom:1px solid var(--border);vertical-align:top">' +
+          '<span style="color:' + (ok ? 'var(--green)' : 'var(--red)') + '">' + (ok ? '✓' : '✗') + '</span>' +
+          (sr.error ? '<div style="color:var(--red);font-size:11px;margin-top:2px">' + escapeHtml(sr.error) + '</div>' : '') +
+          outputHtml + '</td>' +
+          '<td style="padding:4px 8px;border-bottom:1px solid var(--border);text-align:right;vertical-align:top">' + (sr.duration || 0) + 's</td></tr>';
+      }
+      resh += '</tbody></table>';
+    }
+  }
+  document.getElementById('cycle-result').innerHTML = '<h3>結果</h3>' + resh;
+  
+  // Evaluation (Phase 2)
+  if (c.evaluation) {
+    const sc = c.evaluation.score || {};
+    let evh = '';
+    evh += '<div class="stat-row"><span>目標達成度</span><span class="val">' + sc.goal_achievement + '</span></div>';
+    evh += '<div class="stat-row"><span>効率性</span><span class="val">' + sc.efficiency + '</span></div>';
+    evh += '<div class="stat-row"><span>正確性</span><span class="val">' + sc.correctness + '</span></div>';
+    evh += '<div class="stat-row"><span>新規性</span><span class="val">' + sc.novelty + '</span></div>';
+    evh += '<div class="stat-row" style="border-top:1px solid var(--border);padding-top:8px;margin-top:4px"><span style="font-weight:600">総合</span><span class="val" style="font-weight:600">' + sc.overall + '</span></div>';
+    if (c.evaluation.discrepancy) {
+      evh += '<div style="font-size:11px;color:var(--muted);margin-top:6px">' + escapeHtml(c.evaluation.discrepancy) + '</div>';
+    }
+    if (c.evaluation.improvement_suggestion) {
+      evh += '<div style="font-size:11px;color:var(--yellow);margin-top:4px">' + escapeHtml(c.evaluation.improvement_suggestion) + '</div>';
+    }
+    document.getElementById('cycle-evaluation').innerHTML = '<h3>評価</h3>' + evh;
+  } else {
+    document.getElementById('cycle-evaluation').innerHTML = '<h3>評価</h3><div style="color:var(--muted);font-size:12px">（軽量サイクル — 評価なし）</div>';
+  }
+  
+  // Learning
+  if (c.learning) {
+    let lh = '';
+    if (c.learning.drive_adjustments && Object.keys(c.learning.drive_adjustments).length) {
+      lh += '<div style="font-size:12px;margin-bottom:6px">駆動値調整:</div>';
+      for (const [name, val] of Object.entries(c.learning.drive_adjustments)) {
+        const sign = val > 0 ? '+' : '';
+        lh += '<div class="stat-row"><span>' + name + '</span><span class="val" style="color:' + (val > 0 ? 'var(--green)' : 'var(--red)') + '">' + sign + val.toFixed(3) + '</span></div>';
+      }
+    }
+    if (c.learning.memory_importance_update) {
+      lh += '<div class="stat-row"><span>重要度変化</span><span class="val">' + c.learning.memory_importance_update + '</span></div>';
+    }
+    if (c.learning.summary) {
+      lh += '<div style="font-size:11px;color:var(--muted);margin-top:4px">' + escapeHtml(c.learning.summary) + '</div>';
+    }
+    document.getElementById('cycle-learning').innerHTML = '<h3>学習</h3>' + (lh || '<div style="color:var(--muted);font-size:12px">調整なし</div>');
+  } else {
+    document.getElementById('cycle-learning').innerHTML = '<h3>学習</h3><div style="color:var(--muted);font-size:12px">（軽量サイクル — 学習なし）</div>';
+  }
+}
+
+async function loadCycle() {
+  try {
+    const r = await fetch('/api/cycle');
+    const data = await r.json();
+    renderCycle(data);
+  } catch (e) { /* ignore */ }
+}
+
+document.getElementById('cycle-refresh').addEventListener('click', loadCycle);
+setInterval(loadCycle, 5000);
+setTimeout(loadCycle, 600);
+
+// ── Initial data loads ──
+setTimeout(() => { loadMemory(); }, 1000);
+</script>
+</body>
+</html>
