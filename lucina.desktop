@@ -1,0 +1,11 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=lucina-NA (Daemon + WebUI)
+GenericName=AI Agent Launcher
+Comment=Start lucina-NA daemon and WebUI with one click
+Exec=/home/koushi/lucina-NA/lucina.sh
+Path=/home/koushi/lucina-NA
+Terminal=true
+Categories=Utility;
+StartupNotify=false

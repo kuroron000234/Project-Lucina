@@ -22,6 +22,7 @@ Each layer has `interface.py` (dataclass IO) and `layer.py` (implementation):
 
 ## Commands
 
+- `./lucina.sh` — one-click launcher: daemon + WebUI (supervised, auto-restart)
 - `python main.py --message "hello"` — one-shot user interaction
 - `python main.py --daemon` — background autonomous + IPC mode
 - `python main.py --webui` — start WebUI (FastAPI on port 8765)
@@ -29,6 +30,13 @@ Each layer has `interface.py` (dataclass IO) and `layer.py` (implementation):
 - `python main.py --phase 1` — start Phase 1 loop
 - `.venv/bin/python webui/server.py` — start WebUI directly
 - `python -m pytest tests/ -v --tb=short` — run all 97 tests
+
+## One-click launch & process control
+
+- `./lucina.sh` supervises both daemon and WebUI. Processes exit with code 42 to request a restart; the supervisor restarts them automatically.
+- Wanted flags (`data/run/daemon.wanted`, `data/run/webui.wanted`) decide whether the supervisor keeps a process alive. Removing one stops the process; touching it starts it.
+- WebUI コントロールタブ: デーモン/UI の起動・停止・再起動が可能。制御ファイルは `data/ipc/control.json`（stop/restart）、PID は `data/run/*.pid`。
+- `lucina.desktop` — desktop shortcut; install with `cp lucina.desktop ~/.local/share/applications/`
 
 ## WebUI
 

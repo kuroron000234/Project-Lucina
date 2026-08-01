@@ -8,6 +8,9 @@ class EvaluationScore:
     correctness: float
     novelty: float
     overall: float
+    # v3.2: 評価レジームのタグ（学習層が同一タイプ内で統計を取るため）
+    eval_type: str = "rule"      # "llm" | "rule"
+    source: str = "autonomous"   # "dialog" | "autonomous"
 
 
 @dataclass
@@ -16,6 +19,8 @@ class EvaluationInput:
     action_result: "AgentOutput"
     expected_outcome: str
     episode: "Episode"
+    # v3.2: tier2ではLLM評価をスキップしルールベースのみ使用（コスト抑制）
+    use_llm: bool = True
 
 
 @dataclass

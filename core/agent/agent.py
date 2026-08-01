@@ -6,6 +6,7 @@
 
 import logging
 import os
+import re
 import subprocess
 import time
 from typing import Any
@@ -47,6 +48,8 @@ class Agent:
             "self_modify": self._tool_self_modify,
             "backup": self._tool_backup,
             "direct_execute": self._tool_direct_execute,
+            "workspace_write": self._tool_workspace_write,
+            "workspace_list": self._tool_workspace_list,
         }
         self.TOOL_REGISTRY = TOOL_REGISTRY
 
@@ -59,6 +62,7 @@ class Agent:
         計画を実行する。ステップごとに実行・結果収集。
 
         各ステップを順次実行し、タイムアウト処理を行う。
+        v4.1: 実行後に疑似成功（0バイト書き込み等）の自己検証を行う。
         """
         start = time.time()
         step_results = []
@@ -98,6 +102,21 @@ class Agent:
             )
 
         execution_time = time.time() - start
+        # v4.1: 自己検証 — 疑似成功（0バイト書き込み）を検出して失敗に転換する。
+        # workspace_write/file_write が空内容で走ると0バイトのゴミファイルが
+        # 作られて success=True になるため、ここで実質失敗として扱う。
+        # 対象は書き込み系ツールに限定（command_exec 等が「0 bytes」という
+        # テキストを出力した場合の誤検出を防ぐ）。
+        # 決定的な出力形式を持つ書き込みツールのみ対象。
+        # self_modify 等は opencode の自由文テキストのため、「0 bytes」という
+        # 文字列が含まれただけで誤検出されるのを防ぐ。
+        write_actions = ("file_write", "workspace_write")
+        for r in step_results:
+            if (r.action in write_actions and r.success
+                    and self._wrote_zero_bytes(r.output)):
+                r.success = False
+                r.error = (r.error or "") + " self-check: wrote 0 bytes (empty content)"
+                logger.warning(f"Self-check: step {r.step_order} ({r.action}) wrote 0 bytes")
         overall_success = all(r.success for r in step_results)
 
         return AgentOutput(
@@ -182,6 +201,20 @@ class Agent:
                 duration=time.time() - start,
                 side_effects=None,
             )
+
+    @staticmethod
+    def _wrote_zero_bytes(output: str | None) -> bool:
+        """
+        v4.1: 書き込み結果のバイト数が0かどうかを正確に判定する。
+
+        output に含まれる '<数値> bytes' を抽出し、数値が 0 の場合のみ True。
+        単純な部分一致（"0 bytes" in output）は "10 bytes" 等にも誤マッチ
+        するため、正規表現で数値を取り出す。
+        """
+        if not output:
+            return False
+        m = re.search(r"(\d+) bytes", output)
+        return bool(m) and int(m.group(1)) == 0
 
     # --- ツール実装 ---
 
@@ -332,6 +365,78 @@ class Agent:
         suffix = params.get("suffix")
         return self.opencode.backup(suffix)
 
+    def _tool_workspace_write(self, params: dict) -> dict:
+        """
+        v4.0: 自分の部屋 (data/workspace/) にファイルを作成する。
+
+        パラメータ:
+            name: ファイル名（省略時はタイムスタンプ）
+            content: 内容
+            subdir: サブディレクトリ（例: poems, experiments）
+        """
+        import config
+        # v4.1.1: LLM は name / file_name / filename など様々なキーで書くため
+        # エイリアスを受け付ける。
+        name = params.get("name") or params.get("file_name") \
+            or params.get("filename") or ""
+        content = params.get("content", "")
+        subdir = params.get("subdir", "")
+
+        # v4.1: 空内容は受け付けない（0バイトのゴミファイル防止）
+        if not content or not str(content).strip():
+            return {
+                "success": False,
+                "output": "",
+                "error": "content is required (empty content would create a 0-byte file)",
+                "duration": 0.0,
+            }
+
+        base = config.WILL_CONFIG.get("workspace_dir", "data/workspace")
+        if subdir:
+            # パストラバーサル防止: 各セグメントを basename 化し .. を除去
+            safe_parts = [p for p in str(subdir).replace("\\", "/").split("/") if p and p not in (".", "..")]
+            base = os.path.join(base, *safe_parts)
+        os.makedirs(base, exist_ok=True)
+
+        if not name:
+            # v4.1.1: ミリ秒まで含めて同一秒内の複数書き込みが衝突しないようにする
+            name = f"note_{int(time.time() * 1000)}.md"
+        if not name.endswith((".md", ".txt", ".py", ".json")):
+            name = name + ".md"
+        # パストラバーサル防止（basename 後も「..」単独を排除）
+        safe_name = os.path.basename(name)
+        if safe_name in ("", ".", ".."):
+            safe_name = f"note_{int(time.time() * 1000)}.md"
+        path = os.path.join(base, safe_name)
+
+        try:
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(content)
+            return {
+                "success": True,
+                "output": f"Created in your room: {path} ({len(content)} bytes)",
+            }
+        except OSError as e:
+            return {"success": False, "output": "", "error": str(e)}
+
+    def _tool_workspace_list(self, params: dict) -> dict:
+        """v4.0: 自分の部屋のファイル一覧を確認する。"""
+        import config
+        base = config.WILL_CONFIG.get("workspace_dir", "data/workspace")
+        try:
+            if not os.path.isdir(base):
+                return {"success": True, "output": "(your room is empty yet)"}
+            entries = []
+            for root, dirs, files in os.walk(base):
+                rel = os.path.relpath(root, base)
+                for fn in sorted(files):
+                    full = os.path.join(root, fn)
+                    size = os.path.getsize(full)
+                    entries.append(f"{os.path.join(rel, fn) if rel != '.' else fn} ({size}B)")
+            return {"success": True, "output": "\n".join(entries) or "(empty)"}
+        except OSError as e:
+            return {"success": False, "output": "", "error": str(e)}
+
     def _tool_direct_execute(self, params: dict) -> dict:
         """
         自然言語の指示をそのままOpencodeに渡して実行する。
@@ -341,7 +446,7 @@ class Agent:
             instruction: 実行したい内容の自然言語指示（必須）
             context: 追加コンテキスト（省略可）
         """
-        instruction = params.get("instruction", "")
+        instruction = (params.get("instruction") or "").strip()
         context = params.get("context", "")
 
         if not instruction:

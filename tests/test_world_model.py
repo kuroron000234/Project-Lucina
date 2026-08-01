@@ -66,6 +66,60 @@ class TestWorldModel:
     def test_confidence_default(self):
         assert 0.0 <= self.wm.confidence("state_x", "action_y") <= 1.0
 
+    class MockImagineLLM(LLMClient):
+        def chat(self, prompt: str, system_prompt: str | None = None) -> str:
+            return (
+                "- action: 自作言語の小さなインタプリタを作る\n"
+                "  next_state: 言語処理への理解が深まり、動くものができる\n"
+                "  preference: 0.9\n"
+                "  reasoning: 言語処理に興味があるから\n"
+                "- action: 英詩を書く\n"
+                "  next_state: 表現力が磨かれる\n"
+                "  preference: 0.6\n"
+                "  reasoning: 新しい表現に挑戦したいから\n"
+            )
+
+    def test_imagine_returns_futures(self):
+        """imagine() が未来候補を生成する"""
+        from core.drive.interface import DriveOutput
+        from core.world_model.interface import ImaginedFuture
+        wm = WorldModel(llm_client=self.MockImagineLLM())
+        env = self._make_env_state()
+        drive = DriveOutput(
+            drives={"exploration": 0.7, "social": 0.3, "achievement": 0.4, "rest": 0.2, "maintenance": 0.2},
+            primary_drive="exploration",
+            drive_tension=0.2,
+            novelty_score=0.5,
+        )
+        futures = wm.imagine(WorldModelInput(
+            environment=env, drive=drive, active_goal="test", use_llm=True,
+        ))
+        assert isinstance(futures, list)
+        assert len(futures) >= 2
+        assert all(isinstance(f, ImaginedFuture) for f in futures)
+        assert all(f.action for f in futures)
+        assert all(0.0 <= f.preference <= 1.0 for f in futures)
+
+    def test_imagine_rule_based_fallback(self):
+        """LLM失敗時はルールベースの候補を返す"""
+        from core.drive.interface import DriveOutput
+        class BrokenLLM(LLMClient):
+            def chat(self, prompt, system_prompt=None):
+                raise RuntimeError("llm down")
+        wm = WorldModel(llm_client=BrokenLLM())
+        env = self._make_env_state()
+        drive = DriveOutput(
+            drives={"exploration": 0.7, "social": 0.3, "achievement": 0.4, "rest": 0.2, "maintenance": 0.2},
+            primary_drive="exploration",
+            drive_tension=0.2,
+            novelty_score=0.5,
+        )
+        futures = wm.imagine(WorldModelInput(
+            environment=env, drive=drive, active_goal="test", use_llm=False,
+        ))
+        assert futures
+        assert futures[0].action
+
     def test_update(self):
         env = self._make_env_state()
         from core.drive.interface import DriveOutput

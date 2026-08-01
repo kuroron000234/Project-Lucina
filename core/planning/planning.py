@@ -5,6 +5,7 @@
 Phase 1: LLM呼び出しによる計画生成
 """
 
+import json
 import logging
 import re
 import time
@@ -82,11 +83,23 @@ class Planning:
         lines.append(f"## 緊急度: {input.policy.priority}/5")
         lines.append("")
 
-        # ツール一覧
+        # ツール一覧（v4.1: 各ツールの必須パラメータと具体例を明示し、
+        # 空パラメータのステップ生成を防ぐ）
         if input.available_tools:
             lines.append("## 利用可能なツール")
+            lines.append("各ツールのパラメータは必ず具体的な値（パス・内容・クエリ等）を埋めてください。")
+            lines.append("params を空の {} にしたステップは実行時に失敗するため、絶対に生成しないでください。")
+            lines.append("")
             for tool in input.available_tools:
-                lines.append(f"- {tool.name}: {tool.description}")
+                line = f"- {tool.name}: {tool.description}"
+                params = tool.parameters or {}
+                required = params.get("required", [])
+                example = params.get("example", {})
+                if required:
+                    line += f"  [必須パラメータ: {', '.join(required)}]"
+                if example:
+                    line += f"  例: {json.dumps(example, ensure_ascii=False)}"
+                lines.append(line)
             lines.append("")
 
         # 世界モデル予測
@@ -102,12 +115,13 @@ class Planning:
         # 出力形式
         lines.append("## 出力形式")
         lines.append("以下の形式で出力してください。各ステップは具体的なアクションにしてください。")
+        lines.append("params は必ず JSON 形式の辞書で、そのツールの必須パラメータを必ず含めてください。")
         lines.append("")
         lines.append("plan_id: <一意のID>")
         lines.append("steps:")
         lines.append("  - order: 1")
-        lines.append("    action: <ツール名 (file_read|file_write|file_list|command_exec|web_search|web_fetch|code_analyze|notify_user)>")
-        lines.append("    params: {<パラメータ>}")
+        lines.append("    action: <ツール名>")
+        lines.append("    params: {\"path\": \"data/workspace/report.md\", \"content\": \"レポート本文...\"}")
         lines.append("    description: <このステップの説明>")
         lines.append("    expected_result: <期待される結果>")
         lines.append("    fallback: <失敗時の代替アクション>")
@@ -134,7 +148,9 @@ class Planning:
         current_step = None
         in_steps = False
 
-        for line in lines:
+        i = 0
+        while i < len(lines):
+            line = lines[i]
             stripped = line.strip()
 
             if stripped.startswith("plan_id:"):
@@ -183,9 +199,22 @@ class Planning:
                     current_step["action"] = stripped.split(":", 1)[1].strip()
                 elif stripped.startswith("params:"):
                     params_str = stripped.split(":", 1)[1].strip()
-                    if params_str and params_str != "{}":
-                        # 簡易パース（完全なJSONパースは extract_json を使用）
+                    # v4.1: 複数行にまたがる JSON を蓄積してからパースする。
+                    # ローカルLLMは params: { で改行して値を書くことが多く、
+                    # 行単位パースでは空になるため、ブレースが閉じるまで蓄積する。
+                    if params_str.count("{") > params_str.count("}"):
+                        acc = [params_str]
+                        while i + 1 < len(lines):
+                            i += 1
+                            nxt = lines[i]
+                            acc.append(nxt)
+                            if nxt.count("{") <= nxt.count("}") and nxt.count("}") >= 1:
+                                break
+                        params_str = "\n".join(acc)
+                    if params_str and params_str.strip() not in ("", "{}"):
                         current_step["params"] = self._parse_simple_params(params_str)
+                    else:
+                        current_step["params"] = {}
                 elif stripped.startswith("description:"):
                     current_step["description"] = stripped.split(":", 1)[1].strip()
                 elif stripped.startswith("expected_result:"):
@@ -199,6 +228,8 @@ class Planning:
                     except ValueError:
                         pass
 
+            i += 1
+
         # 最後のステップを追加
         if current_step:
             steps.append(current_step)
@@ -206,6 +237,17 @@ class Planning:
         # ステップがない場合はデフォルト計画を生成
         if not steps:
             return self._default_plan(input, plan_id)
+
+        # v4.1: パラメータの実体チェック（スキーマ準拠）。
+        # LLM が params を省略・空文字を含むステップを出した場合は実行不能なので
+        # 除去する。ただし必須パラメータを持たないツール（file_list 等）の
+        # 空 params は正当なので残す（一律除去は regression になる）。
+        required_map = {}
+        if input and input.available_tools:
+            for t in input.available_tools:
+                required_map[t.name] = (t.parameters or {}).get("required", [])
+        steps = [s for s in steps
+                 if self._step_params_are_concrete(s, required_map)]
 
         # Step オブジェクトに変換
         step_objects = []
@@ -219,6 +261,9 @@ class Planning:
                 fallback=s.get("fallback"),
                 timeout=s.get("timeout", 30.0),
             ))
+
+        if not step_objects:
+            return self._default_plan(input, plan_id)
 
         return PlanningOutput(
             plan_id=plan_id,
@@ -252,13 +297,69 @@ class Planning:
         )
 
     def _parse_simple_params(self, params_str: str) -> dict:
-        """簡易パラメータパース。"""
+        """
+        パラメータパース。
+
+        v4.1: まず extract_json で正規JSONとして解釈し、失敗時のみ
+        簡易正規表現パースにフォールバックする。
+        """
+        params_str = params_str.strip()
+        # 正規JSONとして解釈を試みる（複数行・入れ子対応）
+        if params_str.startswith("{"):
+            parsed = self.llm.extract_json(params_str)
+            if parsed:
+                return parsed
+        # フォールバック: 簡易パース
         params = {}
-        # {} で囲まれている場合
         if params_str.startswith("{") and params_str.endswith("}"):
             inner = params_str[1:-1]
-            # キー: 値 のペアを探す
             pairs = re.findall(r'"(\w+)":\s*"([^"]*)"', inner)
             for key, value in pairs:
                 params[key] = value
         return params
+
+    def _step_params_are_concrete(self, step: dict, required_map: dict) -> bool:
+        """
+        v4.1: ステップの params が実行可能な実値を持っているか判定する。
+
+        - ツールスキーマに必須パラメータがある場合: 欠けている/空値なら除去。
+        - 必須パラメータが無いツール（file_list 等）: 空 params でも保持。
+        - スキーマ不明のツール: 空 params は除去（0バイトゴミ生成ガード）。
+        """
+        action = step.get("action")
+        params = step.get("params") or {}
+
+        if action in required_map:
+            required = required_map[action]
+            if not required:
+                return True  # 必須パラメータ無し → 空 params でも正当
+            for key in required:
+                value = params.get(key)
+                if value is None:
+                    logger.warning(
+                        f"Planning: dropping step missing required param '{key}' "
+                        f"(action={action})"
+                    )
+                    return False
+                if isinstance(value, str) and not value.strip():
+                    logger.warning(
+                        f"Planning: dropping step with empty required param '{key}' "
+                        f"(action={action})"
+                    )
+                    return False
+                if isinstance(value, (list, dict)) and not value:
+                    logger.warning(
+                        f"Planning: dropping step with empty required param '{key}' "
+                        f"(action={action})"
+                    )
+                    return False
+            return True
+
+        # スキーマ不明のツール: 空 params のまま実行すると0バイトゴミ等になるため除去
+        if not params:
+            logger.warning(
+                f"Planning: dropping step with empty params "
+                f"(action={action}, order={step.get('order')})"
+            )
+            return False
+        return True

@@ -71,3 +71,54 @@ class TestLongTermPlanning:
     def test_review_period(self):
         review = self.ltp.review_period(1)
         assert isinstance(review, str)
+
+
+class TestWillAspirations:
+    """v4.0: 願望（aspirations）の生成・永続化・強化"""
+
+    class MockAspirationLLM(LLMClient):
+        def chat(self, prompt: str, system_prompt: str | None = None) -> str:
+            return (
+                "自作言語の小さなインタプリタを作る\n"
+                "英詩を書けるようになる\n"
+                "自分専用の知識ベースを育てる\n"
+            )
+
+    def test_aspirations_generated_and_output(self, tmp_path):
+        """plan() が願望を生成し、出力に含める"""
+        ltp = LongTermPlanning(llm_client=self.MockAspirationLLM(),
+                                storage_path=str(tmp_path))
+        result = ltp.plan(self._make_input())
+        assert result.aspirations
+        assert "インタプリタ" in result.aspirations[0]
+
+    def test_aspirations_persisted(self, tmp_path):
+        """願望が long_term_plan.json に保存され再読込される"""
+        import json
+        ltp1 = LongTermPlanning(llm_client=self.MockAspirationLLM(),
+                                storage_path=str(tmp_path))
+        ltp1.plan(self._make_input())
+        # 再読込
+        ltp2 = LongTermPlanning(llm_client=self.MockAspirationLLM(),
+                                storage_path=str(tmp_path))
+        assert ltp2.aspirations
+        assert "インタプリタ" in ltp2.aspirations[0]
+
+    def test_note_aspiration_activity_reinforces(self, tmp_path):
+        """願望に沿った活動で願望が先頭にローテーションされる"""
+        ltp = LongTermPlanning(llm_client=self.MockAspirationLLM(),
+                                storage_path=str(tmp_path))
+        ltp.aspirations = ["A", "B", "C"]
+        ltp.note_aspiration_activity("Bを実現するための活動")
+        assert ltp.aspirations[0] == "B"
+
+    def _make_input(self) -> LongTermPlanningInput:
+        return LongTermPlanningInput(
+            evaluation_history=[],
+            current_date=datetime.now(),
+            personality_state=PersonalityState(
+                name="test", traits={}, speaking_style="",
+                values=[], mood="neutral", relationship={},
+            ),
+            recent_episodes_summary="テストです",
+        )

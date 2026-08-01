@@ -27,6 +27,9 @@ class LongTermPlanningOutput:
     identity_policy: str
     focus_area: str
     reflection: str
+    # v4.0: 願望 (aspirations) — 具体的な「やってみたいこと」のリスト
+    # 人格層がメニューから選ぶのではなく、この願望から自分で目標を生成する
+    aspirations: list[str] = field(default_factory=list)
 
 
 class LongTermPlanning:

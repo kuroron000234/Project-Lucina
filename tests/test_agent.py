@@ -166,3 +166,174 @@ class TestAgent:
         """self_modify がツール一覧に存在する"""
         assert "self_modify" in self.agent.tools
         assert "backup" in self.agent.tools
+
+    # --- v4.0: 意志フェーズ — 自分の部屋 ---
+
+    def test_workspace_write_creates_file(self):
+        """workspace_write が自分の部屋にファイルを作る"""
+        import config
+        import tempfile
+        old = config.WILL_CONFIG.get("workspace_dir")
+        config.WILL_CONFIG["workspace_dir"] = tempfile.mkdtemp()
+        try:
+            result = self.agent.call_tool("workspace_write", {
+                "name": "test_note.md",
+                "content": "# ノート\n実験メモ",
+            })
+            assert result["success"] is True
+            assert "test_note.md" in result["output"]
+            assert os.path.exists(os.path.join(config.WILL_CONFIG["workspace_dir"], "test_note.md"))
+        finally:
+            config.WILL_CONFIG["workspace_dir"] = old
+
+    def test_workspace_write_with_subdir(self):
+        """workspace_write がサブディレクトリにも書ける"""
+        import config
+        import tempfile
+        old = config.WILL_CONFIG.get("workspace_dir")
+        config.WILL_CONFIG["workspace_dir"] = tempfile.mkdtemp()
+        try:
+            result = self.agent.call_tool("workspace_write", {
+                "name": "poem.md", "content": "poem", "subdir": "poems",
+            })
+            assert result["success"] is True
+            assert os.path.exists(os.path.join(config.WILL_CONFIG["workspace_dir"], "poems", "poem.md"))
+        finally:
+            config.WILL_CONFIG["workspace_dir"] = old
+
+    def test_workspace_write_path_traversal_blocked(self):
+        """パストラバーサルは防止される"""
+        import config
+        import tempfile
+        old = config.WILL_CONFIG.get("workspace_dir")
+        config.WILL_CONFIG["workspace_dir"] = tempfile.mkdtemp()
+        try:
+            result = self.agent.call_tool("workspace_write", {
+                "name": "../../evil.md", "content": "x",
+            })
+            assert result["success"] is True
+            assert ".." not in result["output"]
+        finally:
+            config.WILL_CONFIG["workspace_dir"] = old
+
+    def test_workspace_list(self):
+        """workspace_list がファイル一覧を返す"""
+        import config
+        import tempfile
+        old = config.WILL_CONFIG.get("workspace_dir")
+        config.WILL_CONFIG["workspace_dir"] = tempfile.mkdtemp()
+        try:
+            self.agent.call_tool("workspace_write", {"name": "a.md", "content": "x"})
+            result = self.agent.call_tool("workspace_list", {})
+            assert result["success"] is True
+            assert "a.md" in result["output"]
+        finally:
+            config.WILL_CONFIG["workspace_dir"] = old
+
+    # --- v4.1: 自己検証・空パラメータガード ---
+
+    def test_workspace_write_empty_content_fails(self):
+        """v4.1: 空内容の workspace_write は失敗する（0バイトゴミ防止）"""
+        import config
+        import tempfile
+        old = config.WILL_CONFIG.get("workspace_dir")
+        config.WILL_CONFIG["workspace_dir"] = tempfile.mkdtemp()
+        try:
+            result = self.agent.call_tool("workspace_write", {"name": "x.md", "content": ""})
+            assert result["success"] is False
+            assert "content is required" in (result.get("error") or "")
+        finally:
+            config.WILL_CONFIG["workspace_dir"] = old
+
+    def test_workspace_write_file_name_alias(self):
+        """v4.1.1: file_name / filename キーでもファイル名が指定できる"""
+        import config
+        import tempfile
+        old = config.WILL_CONFIG.get("workspace_dir")
+        config.WILL_CONFIG["workspace_dir"] = tempfile.mkdtemp()
+        try:
+            result = self.agent.call_tool("workspace_write", {
+                "file_name": "causal_sim.py", "content": "# sim"})
+            assert result["success"] is True
+            assert "causal_sim.py" in result["output"]
+            assert os.path.exists(
+                os.path.join(config.WILL_CONFIG["workspace_dir"], "causal_sim.py"))
+            # filename キーも同様に動作
+            result2 = self.agent.call_tool("workspace_write", {
+                "filename": "note2.md", "content": "note"})
+            assert result2["success"] is True
+            assert "note2.md" in result2["output"]
+        finally:
+            config.WILL_CONFIG["workspace_dir"] = old
+
+    def test_workspace_write_empty_content_via_execute_fails(self):
+        """v4.1: 空内容のステップは execute 全体で失敗になる"""
+        import config
+        import tempfile
+        old = config.WILL_CONFIG.get("workspace_dir")
+        config.WILL_CONFIG["workspace_dir"] = tempfile.mkdtemp()
+        try:
+            plan = self._make_plan([
+                Step(order=1, action="workspace_write",
+                     params={"name": "x.md", "content": ""},
+                     description="メモ作成", expected_result="作成される"),
+            ])
+            result = self.agent.execute(AgentInput(plan=plan))
+            assert result.overall_success is False
+            assert result.step_results[0].success is False
+        finally:
+            config.WILL_CONFIG["workspace_dir"] = old
+
+    def test_zero_byte_write_converted_to_failure(self):
+        """v4.1: 0バイト書き込みは自己検証で失敗に転換される"""
+        import config
+        import tempfile
+        old = config.WILL_CONFIG.get("workspace_dir")
+        config.WILL_CONFIG["workspace_dir"] = tempfile.mkdtemp()
+        try:
+            # file_write は空でも書き込めてしまうため、自己検証が失敗に転換する
+            f = os.path.join(self.tmpdir, "empty.txt")
+            plan = self._make_plan([
+                Step(order=1, action="file_write",
+                     params={"path": f, "content": ""},
+                     description="空書き込み", expected_result=""),
+            ])
+            result = self.agent.execute(AgentInput(plan=plan))
+            assert result.overall_success is False
+            assert result.step_results[0].success is False
+            assert "0 bytes" in (result.step_results[0].error or "")
+        finally:
+            config.WILL_CONFIG["workspace_dir"] = old
+
+    def test_ten_byte_write_not_falsely_flagged(self):
+        """v4.1: 10バイト等の正当な書き込みは0バイトと誤検出されない"""
+        # 部分一致（"0 bytes" in output）だと "10 bytes" に誤マッチする。
+        # 正規表現でバイト数を抽出する実装を検証する。
+        assert self.agent._wrote_zero_bytes("Written 0 bytes to /tmp/x") is True
+        assert self.agent._wrote_zero_bytes("Written 10 bytes to /tmp/x") is False
+        assert self.agent._wrote_zero_bytes("Written 20 bytes to /tmp/x") is False
+        assert self.agent._wrote_zero_bytes(
+            "Created in your room: x.md (0 bytes)") is True
+        assert self.agent._wrote_zero_bytes(
+            "Created in your room: x.md (13 bytes)") is False
+        assert self.agent._wrote_zero_bytes("") is False
+        assert self.agent._wrote_zero_bytes(None) is False
+
+    def test_normal_write_stays_successful(self):
+        """v4.1: 通常サイズの書き込みは自己検証後も成功のまま"""
+        import config
+        import tempfile
+        old = config.WILL_CONFIG.get("workspace_dir")
+        config.WILL_CONFIG["workspace_dir"] = tempfile.mkdtemp()
+        try:
+            f = os.path.join(self.tmpdir, "ok.txt")
+            plan = self._make_plan([
+                Step(order=1, action="file_write",
+                     params={"path": f, "content": "0123456789"},  # 10 bytes
+                     description="10バイト書き込み", expected_result=""),
+            ])
+            result = self.agent.execute(AgentInput(plan=plan))
+            assert result.overall_success is True
+            assert result.step_results[0].success is True
+        finally:
+            config.WILL_CONFIG["workspace_dir"] = old

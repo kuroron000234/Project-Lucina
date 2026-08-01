@@ -7,6 +7,9 @@ class LearningInput:
     evaluation_history: list["EvaluationScore"]
     drive_snapshot: "DriveOutput"
     episode_id: str
+    # v3.2: ゼロサム・クレジット割り当て用
+    driving_drive: str | None = None   # 行動を選んだ駆動（Noneならprimary_drive使用）
+    source: str = "autonomous"         # "dialog" | "autonomous"
 
 
 @dataclass

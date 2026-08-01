@@ -24,8 +24,8 @@ class LLMClient:
     def __init__(
         self,
         model: str | None = None,
-        temperature: float = 0.7,
-        max_tokens: int = 1024,
+        temperature: float | None = None,
+        max_tokens: int | None = None,
         api_key: str | None = None,
         base_url: str | None = None,
         num_ctx: int | None = None,
@@ -88,13 +88,26 @@ class LLMClient:
             if self.num_ctx:
                 extra["num_ctx"] = self.num_ctx
 
+            # v3.5.2: プロンプト長に応じて max_tokens を動的クランプする。
+            # num_ctx 窓内に収め、プロンプト肥大化時でも窓端での切断を防ぐ。
+            max_tokens = self._effective_max_tokens(prompt, system_prompt)
+
             response = client.chat.completions.create(
                 model=self.model,
                 messages=messages,
                 temperature=self.temperature,
-                max_tokens=self.max_tokens,
+                max_tokens=max_tokens,
                 extra_body=extra,
             )
+
+            # v3.5.2: finish_reason=length（max_tokens 到達で強制切断）を検出して
+            # ログに残す。チャットの長文応答が途中で切れる問題の監視用。
+            finish_reason = getattr(response.choices[0], "finish_reason", None)
+            if finish_reason == "length":
+                logger.warning(
+                    f"LLM response truncated (finish_reason=length, "
+                    f"max_tokens={max_tokens}). Reply may be cut mid-sentence."
+                )
 
             return response.choices[0].message.content or ""
 
@@ -102,6 +115,25 @@ class LLMClient:
             logger.error(f"LLM API call failed: {e}")
             # APIエラー時はモックにフォールバック
             return self._mock_response(prompt)
+
+    def _effective_max_tokens(self, prompt: str, system_prompt: str | None = None) -> int:
+        """
+        実際に使用する max_tokens を決定する（v3.5.2）。
+
+        num_ctx が設定されている場合、プロンプトの概算トークン数
+        （文字数 / 2 を安全側の見積もりとして使用）を差し引き、
+        生成上限がコンテキスト窓を超えないようにクランプする。
+        プロンプトが長いほど残り予算が少なくなるため、窓端での
+        強制切断（finish_reason=length）を防ぐ。
+
+        num_ctx 未設定時は設定値（self.max_tokens）をそのまま返す。
+        """
+        if not self.num_ctx:
+            return self.max_tokens
+        prompt_len = len(prompt) + len(system_prompt or "")
+        est_prompt_tokens = prompt_len // 2  # 日本語は1トークン≈1.5〜2文字の概算
+        budget = self.num_ctx - est_prompt_tokens - 256  # 安全マージン
+        return max(128, min(self.max_tokens, budget))  # 下限128で最低限の生成量を確保
 
     def _mock_response(self, prompt: str) -> str:
         """
@@ -228,11 +260,25 @@ class LLMClient:
         """
         LLMの応答から key: value 形式のペアを抽出する。
         評価層や人格層の構造化出力のパースに使用。
+
+        v3.5.1: 複数行の値を保持するように修正。
+        LLM が "direct_instruction: <長文>\n2行目..." のように自然言語を
+        複数行で出力する場合、従来は最初の1行だけが取れて応答が途中で
+        途切れていた。新しい key: 行が現れるまで前の値に追記する。
         """
         result = {}
+        current_key = None
         for line in text.strip().split("\n"):
-            line = line.strip()
-            if ":" in line and not line.startswith("-"):
-                key, _, value = line.partition(":")
-                result[key.strip()] = value.strip()
+            stripped = line.strip()
+            # 新しいキー行（例: goal: xxx / direct_instruction: yyy）
+            # 正規表現が "-" 始まりを弾くため startswith チェックは不要
+            m = re.match(r"^([A-Za-z_][A-Za-z0-9_]*)\s*:\s?(.*)$", stripped)
+            if m:
+                current_key = m.group(1)
+                result[current_key] = m.group(2).strip()
+            elif current_key is not None and stripped \
+                    and not stripped.startswith("-"):
+                # 複数行値の続きとして追記（応答の途切れ防止）。
+                # ただし構造化リスト（- 始まり）は混入させない。
+                result[current_key] += "\n" + stripped
         return result

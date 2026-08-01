@@ -38,6 +38,39 @@ class MockPlanningLLM(LLMClient):
         )
 
 
+class ParamsInjectionLLM(LLMClient):
+    """プロンプトにツールパラメータ仕様が注入されているかを確認するためのLLM。"""
+    last_prompt = ""
+
+    def chat(self, prompt: str, system_prompt: str | None = None) -> str:
+        ParamsInjectionLLM.last_prompt = prompt
+        return "意味不明な応答"  # パース失敗→デフォルト計画
+
+
+class EmptyParamsLLM(LLMClient):
+    """全ステップが空パラメータの応答を返すLLM（除去検証用）。"""
+
+    def chat(self, prompt: str, system_prompt: str | None = None) -> str:
+        return (
+            "plan_id: plan_empty_001\n"
+            "steps:\n"
+            "  - order: 1\n"
+            "    action: workspace_write\n"
+            "    params: {}\n"
+            "    description: メモ作成\n"
+            "    expected_result: 作成される\n"
+            "    timeout: 10.0\n"
+            "  - order: 2\n"
+            "    action: file_write\n"
+            "    params: {\"path\": \"data/workspace/x.md\", \"content\": \"\"}\n"
+            "    description: 空内容書き込み\n"
+            "    expected_result: 作成される\n"
+            "    timeout: 10.0\n"
+            "expected_outcome: 計画実行\n"
+            "estimated_duration: 20.0"
+        )
+
+
 def make_personality_output() -> PersonalityOutput:
     return PersonalityOutput(
         goal="ワークスペースのファイルを調査する",
@@ -127,3 +160,93 @@ class TestPlanning:
             feedback="ファイルが見つかりません",
         )
         assert isinstance(result, PlanningOutput)
+
+    def test_prompt_includes_tool_param_schemas(self):
+        """v4.1: プロンプトにツールの必須パラメータと例が注入される"""
+        ParamsInjectionLLM.last_prompt = ""
+        p = Planning(llm_client=ParamsInjectionLLM())
+        tools = [
+            ToolInfo(name="workspace_write", description="メモ作成",
+                     parameters={"required": ["content"], "example": {"content": "設計メモ"}}),
+            ToolInfo(name="file_read", description="読み込み",
+                     parameters={"required": ["path"], "example": {"path": "x.md"}}),
+        ]
+        p.make(PlanningInput(
+            policy=make_personality_output(),
+            available_tools=tools,
+        ))
+        assert "必須パラメータ: content" in ParamsInjectionLLM.last_prompt
+        assert "例: {" in ParamsInjectionLLM.last_prompt
+        assert "空の {}" in ParamsInjectionLLM.last_prompt
+
+    def test_steps_with_empty_params_are_dropped(self):
+        """v4.1: 必須パラメータが欠けているステップは除去されデフォルト計画にフォールバック"""
+        p = Planning(llm_client=EmptyParamsLLM())
+        result = p.make(PlanningInput(
+            policy=make_personality_output(),
+            available_tools=[
+                ToolInfo(name="workspace_write", description="メモ作成",
+                         parameters={"required": ["content"]}),
+                ToolInfo(name="file_write", description="書き込み",
+                         parameters={"required": ["path", "content"]}),
+            ],
+        ))
+        # 全ステップが必須パラメータ欠落（{} / content 空）→ デフォルト計画にフォールバック
+        assert result.steps
+        # フォールバックは file_list（必須パラメータなし）のはず
+        assert result.steps[0].action == "file_list"
+
+    def test_no_required_param_tools_keep_empty_params(self):
+        """v4.1: 必須パラメータのないツール(file_list等)の空 params は除去されない"""
+
+        class NoParamLLM(LLMClient):
+            def chat(self, prompt, system_prompt=None):
+                return (
+                    "plan_id: plan_noparam\n"
+                    "steps:\n"
+                    "  - order: 1\n"
+                    "    action: file_list\n"
+                    "    params: {}\n"
+                    "    description: 一覧取得\n"
+                    "    expected_result: 一覧\n"
+                    "    timeout: 10.0\n"
+                    "expected_outcome: 完了\n"
+                    "estimated_duration: 10.0"
+                )
+
+        p = Planning(llm_client=NoParamLLM())
+        result = p.make(PlanningInput(
+            policy=make_personality_output(),
+            available_tools=[
+                ToolInfo(name="file_list", description="一覧取得",
+                         parameters={"required": []}),
+            ],
+        ))
+        assert len(result.steps) == 1
+        assert result.steps[0].action == "file_list"
+        assert result.steps[0].params == {}  # 正当な空 params は保持
+
+    def test_params_with_content_are_kept(self):
+        """v4.1: 実値のある params は保持される"""
+
+        class GoodParamsLLM(LLMClient):
+            def chat(self, prompt, system_prompt=None):
+                return (
+                    "plan_id: plan_good\n"
+                    "steps:\n"
+                    "  - order: 1\n"
+                    "    action: workspace_write\n"
+                    "    params: {\"name\": \"note.md\", \"content\": \"設計メモ\"}\n"
+                    "    description: メモ作成\n"
+                    "    expected_result: 作成される\n"
+                    "    timeout: 10.0\n"
+                    "expected_outcome: 完了\n"
+                    "estimated_duration: 10.0"
+                )
+
+        p = Planning(llm_client=GoodParamsLLM())
+        result = p.make(PlanningInput(
+            policy=make_personality_output(),
+        ))
+        assert len(result.steps) == 1
+        assert result.steps[0].params.get("content") == "設計メモ"

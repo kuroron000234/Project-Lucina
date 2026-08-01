@@ -9,8 +9,10 @@ Phase 2 Step 3: LLMシミュレーション（最小実装）
 
 import logging
 
+import config
 from core.llm import LLMClient
 from core.world_model.interface import (
+    ImaginedFuture,
     Prediction,
     WorldModelInput,
     WorldModelOutput,
@@ -48,24 +50,164 @@ class WorldModel:
         # 主駆動から候補行動を自動設定
         candidate_action = input.candidate_action or input.drive.primary_drive
 
-        # LLMシミュレーションを試行
-        try:
-            prompt = self._build_prediction_prompt(input, candidate_action)
-            system_prompt = (
-                "あなたは世界モデルです。与えられた環境状態と行動から、"
-                "起こりうる結果を複数予測し、それぞれに確率とリスク評価をつけてください。"
-            )
-            response = self.llm.chat(prompt, system_prompt=system_prompt)
-            predictions = self._parse_predictions(response)
-        except Exception as e:
-            logger.warning(f"LLM prediction failed: {e}")
-            predictions = []
+        # LLMシミュレーションを試行（use_llm=False ならルールベースのみ）
+        predictions = []
+        if input.use_llm:
+            try:
+                prompt = self._build_prediction_prompt(input, candidate_action)
+                system_prompt = (
+                    "あなたは世界モデルです。与えられた環境状態と行動から、"
+                    "起こりうる結果を複数予測し、それぞれに確率とリスク評価をつけてください。"
+                )
+                response = self.llm.chat(prompt, system_prompt=system_prompt)
+                predictions = self._parse_predictions(response)
+            except Exception as e:
+                logger.warning(f"LLM prediction failed: {e}")
+                predictions = []
 
         # LLM予測がない場合はルールベースで生成
         if not predictions:
             predictions = self._rule_based_predict(candidate_action, input.environment)
 
         return WorldModelOutput(predictions=predictions)
+
+    def imagine(self, input: WorldModelInput) -> list[ImaginedFuture]:
+        """
+        v4.0: 未来の候補を想像する（「もし◯◯したらどうなる？」）。
+
+        人格層が自分の好みと照らして行動を選ぶための材料を生成する。
+        アクティブ推論における「好ましい未来の事前分布」に相当。
+        LLMで生成を試み、失敗時は駆動からルールベースの候補を返す。
+        use_llm=False（tier2）では LLM コストを払わずルールベースのみ。
+        """
+        if not input.use_llm:
+            return self._rule_based_imagine(input)
+        try:
+            prompt = self._build_imagine_prompt(input)
+            system_prompt = (
+                "あなたは想像力豊かなエージェントです。\n"
+                "自分の性格・記憶・駆動から、『やってみたいこと』の候補を具体的に想像してください。\n"
+                "実現可能で具体的なものにしてください。\n"
+                "出力形式 (YAML風):\n"
+                "- action: <やってみたいこと>\n"
+                "  next_state: <その結果どうなるか>\n"
+                "  preference: <どれだけ望むか 0.0-1.0>\n"
+                "  reasoning: <なぜそれを望むか>"
+            )
+            response = self.llm.chat(prompt, system_prompt=system_prompt)
+            imagined = self._parse_imagined_futures(response)
+            if imagined:
+                return imagined
+        except Exception as e:
+            logger.warning(f"LLM imagination failed: {e}")
+        return self._rule_based_imagine(input)
+
+    def _build_imagine_prompt(self, input: WorldModelInput) -> str:
+        """想像プロンプトを構築する。"""
+        env = input.environment
+        lines = [
+            "## 現在の状態",
+            f"- CPU: {env.system_state.cpu_percent}%",
+            f"- メモリ: {env.system_state.memory_percent}%",
+            f"- ファイル数: {len(env.files) if env.files else 0}",
+            "",
+            "## 駆動状態",
+        ]
+        for name, value in input.drive.drives.items():
+            lines.append(f"- {name}: {value:.2f}")
+        lines.append(f"主駆動: {input.drive.primary_drive}")
+        lines.append("")
+        lines.append("## アクティブゴール")
+        lines.append(input.active_goal)
+        lines.append("")
+        lines.append("## 指示")
+        lines.append("あなたが今『やってみたいこと』の候補を"
+                     f"{config.WILL_CONFIG.get('imagination_count', 3)}つ想像してください。")
+        lines.append("抽象的な理想ではなく、実際に行動に移せる具体性のあるものにしてください。")
+        lines.append("各候補に、どれだけそれを望むか (preference) を数値でつけてください。")
+        return "\n".join(lines)
+
+    def _parse_imagined_futures(self, response: str) -> list[ImaginedFuture]:
+        """LLM応答から ImaginedFuture リストをパースする。"""
+        futures = []
+        current = {}
+        for line in response.strip().split("\n"):
+            stripped = line.strip()
+            if stripped.startswith("- action:"):
+                if current and "action" in current:
+                    futures.append(self._make_imagined(current))
+                current = {"action": stripped.split(":", 1)[1].strip()}
+            elif current:
+                if stripped.startswith("next_state:"):
+                    current["next_state"] = stripped.split(":", 1)[1].strip()
+                elif stripped.startswith("preference:"):
+                    try:
+                        current["preference"] = float(stripped.split(":", 1)[1].strip())
+                    except ValueError:
+                        current["preference"] = 0.5
+                elif stripped.startswith("reasoning:"):
+                    current["reasoning"] = stripped.split(":", 1)[1].strip()
+        if current and "action" in current:
+            futures.append(self._make_imagined(current))
+        return [f for f in futures if f.action]
+
+    def _make_imagined(self, data: dict) -> ImaginedFuture:
+        """辞書から ImaginedFuture を生成する。"""
+        return ImaginedFuture(
+            action=data.get("action", ""),
+            next_state=data.get("next_state", ""),
+            preference=max(0.0, min(1.0, float(data.get("preference", 0.5)))),
+            reasoning=data.get("reasoning", ""),
+        )
+
+    def _rule_based_imagine(self, input: WorldModelInput) -> list[ImaginedFuture]:
+        """
+        ルールベースの想像候補。
+        LLMが使えない場合のフォールバック。駆動値に応じて候補を生成する。
+        """
+        drives = input.drive.drives
+        primary = input.drive.primary_drive
+        templates = {
+            "exploration": (
+                "ワークスペースの未踏ファイルを探索する",
+                "新しい発見があり、知識が広がる",
+            ),
+            "social": (
+                "ユーザーと対話して最近の出来事を共有する",
+                "ユーザーとの関係が深まる",
+            ),
+            "achievement": (
+                "コードベースに小さな改善を加える",
+                "達成感が得られ、システムが良くなる",
+            ),
+            "rest": (
+                "システム状態を静かに監視する",
+                "エネルギーを節約し、状態が安定する",
+            ),
+            "maintenance": (
+                "ログと記憶を整理する",
+                "整理され、次の行動の準備ができる",
+            ),
+        }
+        futures = []
+        ordered = sorted(drives.items(), key=lambda x: -x[1])
+        for name, value in ordered[:3]:
+            if name in templates:
+                action, next_state = templates[name]
+                futures.append(ImaginedFuture(
+                    action=action,
+                    next_state=next_state,
+                    preference=max(0.3, min(0.9, value)),
+                    reasoning=f"{name}駆動が {value:.2f} と高いため",
+                ))
+        if not futures:
+            futures.append(ImaginedFuture(
+                action="現在の状態を維持する",
+                next_state="安定が続く",
+                preference=0.5,
+                reasoning="特に強い駆動がないため",
+            ))
+        return futures
 
     def simulate(self, state, plan) -> list[Prediction]:
         """
@@ -94,31 +236,53 @@ class WorldModel:
 
         return predictions
 
-    def update(self, actual: "Episode", prediction: Prediction):
+    def update(self, actual: "Episode", prediction: Prediction,
+               actual_overall: float | None = None):
         """
         実際の結果と予測の差を学習してモデルを更新する。
-        Phase 2 では統計データの蓄積のみ。
+
+        v3.2: 実誤差項を記録する。
+        キーは (action, risk_level) で統計を集約（フリーテキストの
+        next_state[:50] による断片化を解消）。
+        誤差 = |prediction.expected_reward − actual_overall|。
         """
-        key = (prediction.action, prediction.next_state[:50])
+        key = (prediction.action, prediction.risk_level)
         if key not in self.statistics:
             self.statistics[key] = {"count": 0, "total_error": 0.0}
 
+        # 実誤差の記録（actual_overall が無い場合は中立値0.5との差）
+        actual_val = actual_overall if actual_overall is not None else 0.5
+        error = abs(prediction.expected_reward - actual_val)
         self.statistics[key]["count"] += 1
-        # 実際の結果との誤差は簡易的に計算（Phase 2 では精度より学習プロセス）
-        logger.debug(f"WorldModel updated: {key}, count={self.statistics[key]['count']}")
+        self.statistics[key]["total_error"] += error
+        logger.debug(
+            f"WorldModel updated: {key}, count={self.statistics[key]['count']}, "
+            f"error={error:.3f}"
+        )
 
     def confidence(self, state: str, action: str) -> float:
         """
         特定の状態-行動ペアに対する予測の確信度を返す。
 
+        v3.2: 誤差項を反映。
+        - update() の統計キーは (action, risk_level) なので、action 単位で集約する
+        - 誤差が大きい（予測が外れている）ほど確信度が下がる
+        - サンプル数が少ない（<3）は低い確信度（0.3）
+
         エッジケース:
         - 未知の状態: 低い確信度（0.3）を返す
         """
-        key = (action, state[:50])
-        stats = self.statistics.get(key)
-        if stats and stats["count"] > 5:
-            return min(1.0, stats["count"] / 20.0)
-        return 0.3  # 未知の状態は低確信度
+        relevant = [s for (a, _), s in self.statistics.items() if a == action]
+        if not relevant:
+            return 0.3  # 未知の状態は低確信度
+        total_count = sum(s["count"] for s in relevant)
+        total_error = sum(s["total_error"] for s in relevant)
+        if total_count < 3:
+            return 0.3
+        sample_factor = min(1.0, total_count / 20.0)
+        avg_error = total_error / total_count
+        accuracy = max(0.1, 1.0 - avg_error)
+        return sample_factor * accuracy
 
     def _build_prediction_prompt(self, input: WorldModelInput, candidate_action: str) -> str:
         """予測プロンプトを構築する。"""

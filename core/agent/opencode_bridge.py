@@ -5,17 +5,19 @@ Opencode CLI を呼び出して、タスクを委託実行する。
 web検索・URL取得・コード解析・自己改変などの複雑な処理を
 Opencodeエージェントに任せることで高精度な実行を実現する。
 
-重要: `--format json` フラグは使用しないこと。
+重要: `opencode run` に `--format json` を渡さないこと。
 opencode v1.18.7 では JSON形式出力時にリモートレジストリ(models.dev)
 との同期処理でハングする。代わりにデフォルト(プレーンテキスト)形式を使用。
 90秒のタイムアウトで保護しているが、JSON形式のハングはこれでも回避できない。
+
+なお `opencode session list --format json` はハングせず即座に応答するため、
+セッションIDの発見（v4.1.2）には安全に使用している。
 """
 
 import ast
 import json
 import logging
 import os
-import re
 import shutil
 import subprocess
 import time
@@ -75,7 +77,7 @@ class OpencodeBridge:
         """
         Build the opencode subprocess command.
 
-        NOTE: Does NOT use --format json because opencode v1.18.7
+        NOTE: Does NOT use --format json for `run` because opencode v1.18.7
         hangs in JSON format mode (tries to sync models.dev registry).
         Uses default plain text format instead, which is reliable.
         """
@@ -86,6 +88,47 @@ class OpencodeBridge:
         if self._session_id:
             cmd.extend(["--session", self._session_id])
         return cmd
+
+    def _discover_session_id(self) -> str | None:
+        """
+        v4.1.2: 最新の lucina-daemon セッションIDを `opencode session list` から取得する。
+
+        従来は run() の stderr からセッションIDを抽出しようとしていたが、
+        --format json を使わないため stderr にセッションIDは含まれず、
+        毎回新規セッションが作成されて肥大化していた（74個の lucina-daemon
+        セッション・opencode.db 1.6GB に膨張）。
+
+        `opencode session list --format json` は即座に結果を返し、
+        タイトルとディレクトリで絞り込んで最新セッションを特定できる。
+        """
+        try:
+            result = subprocess.run(
+                ["opencode", "session", "list", "--format", "json"],
+                capture_output=True,
+                text=True,
+                timeout=15,
+            )
+            if result.returncode != 0:
+                return None
+            sessions = json.loads(result.stdout)
+        except (json.JSONDecodeError, subprocess.TimeoutExpired, OSError) as e:
+            logger.warning(f"Session discovery failed: {e}")
+            return None
+
+        target_dir = str(PROJECT_ROOT)
+        candidates = [
+            s for s in sessions
+            if isinstance(s, dict)
+            and s.get("title") == "lucina-daemon"
+            and s.get("directory") == target_dir
+            and isinstance(s.get("id"), str)
+            and s["id"].startswith("ses_")
+        ]
+        if not candidates:
+            return None
+        # updated が最新のものを選択
+        latest = max(candidates, key=lambda s: s.get("updated", 0))
+        return latest["id"]
 
     # ── Health check ──
 
@@ -156,8 +199,31 @@ class OpencodeBridge:
             # Stdout = model response text (plain text, not JSON)
             output = result.stdout.strip()
 
-            # Stderr = session ID info, progress bars, logs
+            # Stderr = progress bars, logs (no session ID in plain format)
             stderr = result.stderr.strip()
+
+            # v4.1.2: セッション付き実行が失敗した場合（保存済みセッションが
+            # 削除済み等で無効化されている可能性があるため）、セッションを
+            # リセットして1回だけ新規セッションでリトライする。
+            # 失敗の原因がセッション以外（モデルエラー等）でもコスト2倍に
+            # なるが、単発のリトライなので許容する。
+            if result.returncode != 0 and self._session_id:
+                logger.warning(
+                    f"Opencode run failed with saved session {self._session_id}; "
+                    f"retrying with a fresh session"
+                )
+                self._session_id = None
+                LUCINA_SESSION_ID_FILE.unlink(missing_ok=True)
+                cmd = self._build_cmd(task)
+                result = subprocess.run(
+                    cmd,
+                    capture_output=True,
+                    text=True,
+                    timeout=self.timeout,
+                )
+                duration = time.time() - start
+                output = result.stdout.strip()
+                stderr = result.stderr.strip()
 
             if result.returncode != 0:
                 return {
@@ -167,9 +233,11 @@ class OpencodeBridge:
                     "duration": duration,
                 }
 
-            # Capture session ID from stderr logs (session ID appears in log events)
-            if not self._session_id and stderr:
-                sid = self._extract_session_id(stderr)
+            # v4.1.2: セッションIDの永続化（stderr からの抽出は廃止）。
+            # 実行後に対応する lucina-daemon セッションを session list から
+            # 発見して保存し、次回以降は --session で再利用する。
+            if not self._session_id:
+                sid = self._discover_session_id()
                 if sid:
                     self._save_session(sid)
 
@@ -275,41 +343,6 @@ class OpencodeBridge:
         return self.run(f"run tests in {PROJECT_ROOT / test_path} and report results")
 
     # ── Internal helpers ──
-
-    def _extract_session_id(self, stderr: str) -> str | None:
-        """
-        Extract sessionID from opencode stderr log output.
-
-        When running without --format json, the session ID appears
-        in stderr log events like: {"sessionID": "ses_..."}
-        Observed convention: opencode session IDs start with 'ses_'.
-        """
-        if not stderr:
-            return None
-
-        for line in stderr.strip().split("\n"):
-            line = line.strip()
-            if not line:
-                continue
-
-            # Try to find session ID in log event JSON (stderr format)
-            if '"sessionID"' in line or '"session_id"' in line:
-                try:
-                    event = json.loads(line)
-                    for key in ("sessionID", "session_id"):
-                        sid = event.get(key)
-                        if sid and isinstance(sid, str) and sid.startswith("ses_"):
-                            return sid
-                except json.JSONDecodeError:
-                    pass
-
-            # Also check plain text patterns
-            if "session" in line.lower() and "ses_" in line:
-                match = re.search(r'ses_[a-zA-Z0-9]+', line)
-                if match:
-                    return match.group(0)
-
-        return None
 
     def _build_project_context(self, target_file: str | None = None) -> str:
         """Opencodeに渡すプロジェクト構造のコンテキストを生成する。"""

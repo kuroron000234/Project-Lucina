@@ -7,7 +7,9 @@
 Phase 2 Step 1: LLM評価 + ルールベース評価のハイブリッド
 """
 
+import json
 import logging
+import os
 
 import config
 from core.evaluation.interface import (
@@ -24,17 +26,27 @@ class Evaluation:
     """
     評価層: 行動結果を多次元で評価する。
 
+    v3.2:
+    - eval_type（llm/rule）と source（dialog/autonomous）を各スコアにタグ付け
+    - 評価履歴をアトミックに永続化（tmp+rename）し、再起動後も学習が機能する
+    - use_llm=False でルールベース評価のみ実行（tier2のコスト抑制）
+
     エッジケース:
     - 目標未定義: goal が空ならデフォルト "探索" とみなす
     - 結果が空: 何もしなかった場合の評価（コスト=0、達成度=0）
     - 評価不能: overall = 0.5 の中間値
+    - 永続化ファイル破損: 空履歴で復帰（学習は再蓄積）
     """
 
-    def __init__(self, llm_client: LLMClient | None = None):
+    def __init__(self, llm_client: LLMClient | None = None,
+                 storage_path: str | None = None):
         self.llm = llm_client or LLMClient()
         self.history: list[EvaluationScore] = []
         self.max_history = config.EVALUATION_CONFIG["history_size"]
         self.weights = config.EVALUATION_CONFIG["weights"]
+        self.storage_path = storage_path
+        if storage_path:
+            self.history = self._load_history()
 
     def evaluate(self, input: EvaluationInput) -> EvaluationOutput:
         """
@@ -42,8 +54,8 @@ class Evaluation:
 
         LLM評価を試み、パースに失敗した場合はルールベース評価にフォールバック。
         """
-        # LLM評価を試行
-        llm_result = self._llm_evaluate(input)
+        # LLM評価を試行（use_llm=False ならルールベースのみ）
+        llm_result = self._llm_evaluate(input) if input.use_llm else None
 
         # LLM評価が有効ならそれを、失敗したらルールベース評価を使用
         if llm_result and self._is_valid_score(llm_result):
@@ -53,6 +65,10 @@ class Evaluation:
             score = self._rule_based_evaluate(input)
             evaluation_type = "rule"
 
+        # v3.2: レジームタグを付与（学習層が同一タイプ内で統計を取るため）
+        score.eval_type = evaluation_type
+        score.source = getattr(input.episode, "source", "autonomous")
+
         discrepancy = self._compute_discrepancy(input, score)
         improvement = self._generate_improvement_suggestion(input, score)
 
@@ -60,6 +76,10 @@ class Evaluation:
         self.history.append(score)
         if len(self.history) > self.max_history:
             self.history = self.history[-self.max_history:]
+
+        # v3.2: アトミック永続化
+        if self.storage_path:
+            self._persist_history()
 
         logger.debug(
             f"Evaluation ({evaluation_type}): overall={score.overall:.2f}, "
@@ -203,6 +223,64 @@ class Evaluation:
             if not (0.0 <= val <= 1.0):
                 return False
         return True
+
+    def _persist_history(self):
+        """
+        評価履歴をアトミックに永続化する（tmp+rename）。
+
+        スーパーバイザによる強制終了（SIGTERM/SIGKILL）でもファイルが
+        破損しないよう、一時ファイルへの書き込み後に rename する。
+        """
+        try:
+            tmp_path = f"{self.storage_path}.tmp"
+            data = {"version": 1, "entries": [
+                {
+                    "goal_achievement": s.goal_achievement,
+                    "efficiency": s.efficiency,
+                    "correctness": s.correctness,
+                    "novelty": s.novelty,
+                    "overall": s.overall,
+                    "eval_type": s.eval_type,
+                    "source": s.source,
+                }
+                for s in self.history
+            ]}
+            with open(tmp_path, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+            os.replace(tmp_path, self.storage_path)
+        except Exception as e:
+            logger.warning(f"Failed to persist evaluation history: {e}")
+
+    def _load_history(self) -> list[EvaluationScore]:
+        """
+        永続化された評価履歴を型安全に読み込む。
+
+        破損・欠落時は空リストで復帰する（学習は再蓄積される）。
+        """
+        try:
+            if not os.path.exists(self.storage_path):
+                return []
+            with open(self.storage_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            entries = data.get("entries", [])
+            result = []
+            for e in entries:
+                try:
+                    result.append(EvaluationScore(
+                        goal_achievement=float(e.get("goal_achievement", 0.5)),
+                        efficiency=float(e.get("efficiency", 0.5)),
+                        correctness=float(e.get("correctness", 0.5)),
+                        novelty=float(e.get("novelty", 0.5)),
+                        overall=float(e.get("overall", 0.5)),
+                        eval_type=e.get("eval_type", "rule"),
+                        source=e.get("source", "autonomous"),
+                    ))
+                except (ValueError, TypeError):
+                    continue
+            return result[-self.max_history:]
+        except Exception as e:
+            logger.warning(f"Failed to load evaluation history: {e}")
+            return []
 
     def _compute_discrepancy(self, input: EvaluationInput, score: EvaluationScore) -> str:
         """

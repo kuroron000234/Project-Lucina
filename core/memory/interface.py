@@ -12,6 +12,9 @@ class Episode:
     result: str
     importance: float
     tags: list[str] = field(default_factory=list)
+    # v3.2: 学習ループの配線用フィールド（既存データ互換のためデフォルト値付き）
+    source: str = "autonomous"   # "dialog" | "autonomous"
+    driving_drive: str = ""      # 行動を選択した駆動（記録時点）
 
 
 @dataclass

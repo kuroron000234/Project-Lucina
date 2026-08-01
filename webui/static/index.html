@@ -57,7 +57,7 @@ body {
 
 /* ── Chat ── */
 .chat-area { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 12px; padding-bottom: 12px; }
-.message { max-width: 85%; padding: 10px 14px; border-radius: 12px; font-size: 14px; line-height: 1.5; }
+.message { max-width: 85%; padding: 10px 14px; border-radius: 12px; font-size: 14px; line-height: 1.5; white-space: pre-wrap; word-break: break-word; }
 .message.user { align-self: flex-end; background: var(--accent); color: #fff; }
 .message.agent { align-self: flex-start; background: var(--surface); border: 1px solid var(--border); }
 .message.system { align-self: center; background: transparent; color: var(--muted); font-size: 12px; }
@@ -118,6 +118,23 @@ body {
 .goal-item .goal-meta { display: flex; gap: 16px; font-size: 11px; color: var(--muted); margin-top: 3px; }
 .progress-bar { display: inline-block; height: 6px; width: 80px; background: var(--border); border-radius: 3px; vertical-align: middle; }
 .routine-item { padding: 6px 0; font-size: 13px; border-bottom: 1px solid var(--border); }
+
+/* ── Control ── */
+.ctl-status { display: flex; justify-content: space-between; font-size: 13px; padding: 4px 0; }
+.ctl-status .val { color: var(--accent); }
+.ctl-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; vertical-align: middle; }
+.ctl-dot.on { background: var(--green); box-shadow: 0 0 6px var(--green); }
+.ctl-dot.off { background: var(--red); }
+.ctl-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.ctl-btn { padding: 8px 16px; border: 1px solid var(--border); border-radius: 8px;
+  background: var(--surface); color: var(--text); font-size: 13px; cursor: pointer;
+  transition: all .15s; }
+.ctl-btn:hover { border-color: var(--accent); color: var(--accent); }
+.ctl-btn.danger:hover { border-color: var(--red); color: var(--red); }
+.ctl-btn:disabled { opacity: .45; cursor: default; }
+.ctl-msg { margin-top: 10px; font-size: 13px; color: var(--muted); min-height: 18px; }
+.ctl-help { font-size: 13px; color: var(--muted); line-height: 1.8; }
+.ctl-help code { background: rgba(0,0,0,.3); padding: 2px 6px; border-radius: 4px; font-size: 12px; color: var(--accent); }
 </style>
 </head>
 <body>
@@ -135,6 +152,7 @@ body {
     <div class="tab" data-tab="memory">記憶 <span class="count" id="memory-count">0</span></div>
     <div class="tab" data-tab="logs">ログ</div>
     <div class="tab" data-tab="plan">計画</div>
+    <div class="tab" data-tab="control">コントロール</div>
   </div>
 
   <div class="panels">
@@ -220,7 +238,40 @@ body {
         <div class="card"><h3>目標</h3><div id="plan-goals"></div></div>
         <div class="card"><h3>ルーティン</h3><div id="plan-routines"></div></div>
       </div>
+      <div class="plan-grid" style="margin-top:16px">
+        <div class="card"><h3>願望（やってみたいこと）</h3><div id="plan-aspirations"></div></div>
+        <div class="card"><h3>自分の部屋</h3><div id="plan-workspace"></div></div>
+      </div>
       <div class="card" style="margin-top:16px"><h3>アイデンティティ方針</h3><div id="plan-policy" style="font-size:13px;color:var(--muted)"></div></div>
+      <div class="card" style="margin-top:16px"><h3>日記</h3><div id="plan-diary" style="font-size:13px;color:var(--muted)"></div></div>
+    </div>
+
+    <!-- Control -->
+    <div class="panel" id="panel-control">
+      <div class="status-grid">
+        <div class="card" id="ctl-daemon"><h3>デーモン</h3></div>
+        <div class="card" id="ctl-webui"><h3>WebUI</h3></div>
+      </div>
+      <div class="card" style="margin-top:16px">
+        <h3>操作</h3>
+        <div class="ctl-actions" id="ctl-actions">
+          <button class="ctl-btn" data-act="daemon:start">デーモン起動</button>
+          <button class="ctl-btn" data-act="daemon:stop">デーモン停止</button>
+          <button class="ctl-btn" data-act="daemon:restart">デーモン再起動</button>
+          <button class="ctl-btn danger" data-act="ui:restart">UI再起動</button>
+          <button class="ctl-btn danger" data-act="ui:stop">UI停止</button>
+          <button class="ctl-btn danger" data-act="all:restart">すべて再起動</button>
+          <button class="ctl-btn danger" data-act="all:stop">すべて停止</button>
+        </div>
+        <div class="ctl-msg" id="ctl-msg"></div>
+      </div>
+      <div class="card" style="margin-top:16px">
+        <h3>起動方法</h3>
+        <div class="ctl-help">
+          <code>./lucina.sh</code> をダブルクリック、またはデスクトップショートカット (<code>lucina.desktop</code>) から起動します。<br>
+          スーパーバイザがデーモンとUIのクラッシュ・再起動を監視します。このページが <code>./lucina.sh</code> 経由でない場合（直接 python 起動）は「再起動」後の自動復帰は行われません。
+        </div>
+      </div>
     </div>
   </div>
 </div>
@@ -243,7 +294,27 @@ const chatInput = document.getElementById('chat-input');
 const chatSend = document.getElementById('chat-send');
 let ws = null;
 
+let lastThinkingEl = null;
+
 function addMessage(kind, text, extra) {
+  // v4.0.2: thinking バブルは積み重ねず、最後の1つを上書きする。
+  // ローカルLLMの応答生成は数分かかるため、進捗ハートビートを
+  // 同じバブルに表示し続ける（ユーザーに「処理中」を見せる）。
+  if (kind === 'thinking') {
+    if (lastThinkingEl) {
+      lastThinkingEl.textContent = text;
+      chatArea.scrollTop = chatArea.scrollHeight;
+      return;
+    }
+    const tdiv = document.createElement('div');
+    tdiv.className = 'message thinking';
+    tdiv.textContent = text;
+    lastThinkingEl = tdiv;
+    chatArea.appendChild(tdiv);
+    chatArea.scrollTop = chatArea.scrollHeight;
+    return;
+  }
+  lastThinkingEl = null;
   const div = document.createElement('div');
   div.className = 'message ' + kind;
   let html = '';
@@ -286,9 +357,39 @@ function connectWs() {
       case 'thinking':
         addMessage('thinking', escapeHtml(data.label), data);
         break;
-      case 'error':
-        addMessage('system', '⚠️ ' + escapeHtml(data.text));
+      case 'error': {
+        // Error bubble with an optional "start daemon" action so a stopped
+        // daemon is not a dead end (server also auto-starts on chat).
+        const div = document.createElement('div');
+        div.className = 'message system';
+        div.style.display = 'flex';
+        div.style.flexWrap = 'wrap';
+        div.style.alignItems = 'center';
+        div.style.gap = '10px';
+        div.style.margin = '0 auto';
+        div.textContent = '⚠️ ' + data.text;
+        const btn = document.createElement('button');
+        btn.className = 'ctl-btn';
+        btn.style.padding = '4px 12px';
+        btn.style.fontSize = '12px';
+        btn.textContent = 'デーモンを起動';
+        btn.addEventListener('click', async () => {
+          btn.disabled = true;
+          btn.textContent = '起動中...';
+          try {
+            const r = await fetch('/api/control/daemon/start', {method: 'POST'});
+            const d = await r.json();
+            btn.textContent = d.ok ? '起動しました。もう一度送信してください' : (d.message || '失敗');
+          } catch (e) {
+            btn.textContent = 'リクエスト失敗';
+          }
+          setTimeout(() => { if (div.contains(btn)) btn.remove(); }, 8000);
+        });
+        div.appendChild(btn);
+        chatArea.appendChild(div);
+        chatArea.scrollTop = chatArea.scrollHeight;
         break;
+      }
     }
   };
 }
@@ -313,7 +414,7 @@ setInterval(async () => {
 
     // Daemon badge
     document.getElementById('daemon-badge').textContent =
-      data.daemon ? 'デーモン: 起動中' : 'デーモン: 停止';
+      (data.daemon && data.daemon.running) ? 'デーモン: 起動中' : 'デーモン: 停止';
 
     // Drives
     const driveColors = {exploration: '#58a6ff', social: '#bc8cff', achievement: '#3fb950', rest: '#d29922', maintenance: '#f85149'};
@@ -332,7 +433,8 @@ setInterval(async () => {
       '<div class="stat-row"><span>名前</span><span class="val">' + (p.name || 'Lucina') + '</span></div>' +
       '<div class="stat-row"><span>ムード</span><span class="val">' + (p.mood || 'neutral') + '</span></div>' +
       '<div class="stat-row"><span>信頼度</span><span class="val">' + (p.trust || 0) + '</span></div>' +
-      '<div class="stat-row"><span>親密度</span><span class="val">' + (p.familiarity || 0) + '</span></div>';
+      '<div class="stat-row"><span>親密度</span><span class="val">' + (p.familiarity || 0) + '</span></div>' +
+      (p.self_model ? '<div style="font-size:12px;color:var(--muted);margin-top:8px;padding-top:8px;border-top:1px solid var(--border)">自我モデル: ' + escapeHtml(p.self_model) + '</div>' : '');
 
     // Environment
     const e = data.env || {};
@@ -365,6 +467,54 @@ setInterval(async () => {
   } catch (e) { /* ignore */ }
 }, 3000);
 
+// ── v4.0: 能動発話ポーリング（エージェントから自発的に話しかける）──
+let lastProactiveId = null;
+
+async function pollProactive() {
+  try {
+    const r = await fetch('/api/proactive');
+    const d = await r.json();
+    if (!d || !d.id || d.id === lastProactiveId) return;
+    lastProactiveId = d.id;
+    // チャットタブに「自発」メッセージとして表示
+    const div = document.createElement('div');
+    div.className = 'message agent';
+    div.style.borderColor = 'var(--purple)';
+    div.innerHTML = '<div class="msg-label">Lucina (自発)</div>' + escapeHtml(d.message || '');
+    chatArea.appendChild(div);
+    chatArea.scrollTop = chatArea.scrollHeight;
+  } catch (e) { /* ignore */ }
+}
+setInterval(pollProactive, 5000);
+
+// ── v4.0: 日記・ワークスペース・願望の表示 ──
+async function loadWillTab() {
+  try {
+    const r = await fetch('/api/diary');
+    const d = await r.json();
+    const diaries = d.diaries || [];
+    const diaryHtml = diaries.length
+      ? diaries.map(x => '<div style="margin-bottom:10px"><b>' + escapeHtml(x.date) + '</b><pre style="white-space:pre-wrap;font-family:inherit;font-size:12px;color:var(--muted);margin-top:4px">' + escapeHtml(x.content) + '</pre></div>').join('')
+      : '<div style="font-size:12px">まだ日記がありません（夜に自動で書かれます）</div>';
+    document.getElementById('plan-diary').innerHTML = diaryHtml;
+  } catch (e) { /* ignore */ }
+
+  try {
+    const r = await fetch('/api/workspace');
+    const d = await r.json();
+    const files = d.files || [];
+    const wsHtml = files.length
+      ? '<table style="width:100%;border-collapse:collapse;font-size:12px"><thead><tr>' +
+        '<th style="text-align:left;color:var(--muted);padding:4px 8px;border-bottom:1px solid var(--border)">ファイル</th>' +
+        '<th style="text-align:right;color:var(--muted);padding:4px 8px;border-bottom:1px solid var(--border)">サイズ</th></tr></thead><tbody>' +
+        files.map(f => '<tr><td style="padding:4px 8px;border-bottom:1px solid var(--border)">' + escapeHtml(f.path) + '</td>' +
+          '<td style="padding:4px 8px;border-bottom:1px solid var(--border);text-align:right">' + f.size + 'B</td></tr>').join('') +
+        '</tbody></table>'
+      : '<div style="font-size:12px">部屋はまだ空です（エージェントが自由に作ります）</div>';
+    document.getElementById('plan-workspace').innerHTML = wsHtml;
+  } catch (e) { /* ignore */ }
+}
+
 // ── Plan polling ──
 setInterval(async () => {
   try {
@@ -390,8 +540,20 @@ setInterval(async () => {
     document.getElementById('plan-routines').innerHTML = rhtml;
 
     document.getElementById('plan-policy').textContent = data.identity_policy || '（未設定）';
+
+    // v4.0: 願望
+    const aspirations = data.aspirations || [];
+    let ah = aspirations.length ? '' : '<div style="color:var(--muted);font-size:12px">願望なし</div>';
+    for (const a of aspirations) {
+      ah += '<div class="goal-item"><div class="goal-text">' + escapeHtml(a) + '</div></div>';
+    }
+    document.getElementById('plan-aspirations').innerHTML = ah;
   } catch (e) { /* ignore */ }
 }, 5000);
+
+// v4.0: 日記・ワークスペース読み込み（計画タブが開かれた時にも実行）
+setInterval(loadWillTab, 10000);
+setTimeout(loadWillTab, 800);
 
 // ── Memory refresh ──
 async function loadMemory() {
@@ -535,6 +697,13 @@ function renderCycle(data) {
     if (c.decision.conversation_intent) {
       dech += '<div class="stat-row"><span>会話意図</span><span class="val">' + escapeHtml(c.decision.conversation_intent) + '</span></div>';
     }
+    if (c.decision.refusal) {
+      dech += '<div class="stat-row"><span>拒否</span><span class="val" style="color:var(--red)">true</span></div>';
+    }
+    // v4.0: 内言（なぜこの行動を選んだか）
+    if (c.decision.inner_monologue) {
+      dech += '<div style="margin-top:8px;padding:8px;background:rgba(0,0,0,0.2);border-radius:6px;font-size:12px;color:var(--purple);border-left:2px solid var(--purple)">💭 ' + escapeHtml(c.decision.inner_monologue) + '</div>';
+    }
   }
   document.getElementById('cycle-decision').innerHTML = '<h3>判断</h3>' + dech;
   
@@ -658,6 +827,72 @@ async function loadCycle() {
 document.getElementById('cycle-refresh').addEventListener('click', loadCycle);
 setInterval(loadCycle, 5000);
 setTimeout(loadCycle, 600);
+
+// ── Control panel (daemon / UI start-stop-restart) ──
+const CONTROL_ACTIONS = {
+  'daemon:start':   {url: '/api/control/daemon/start',   confirm: null},
+  'daemon:stop':    {url: '/api/control/daemon/stop',    confirm: 'デーモンを停止しますか？停止中はチャット・自律動作が利用できません。'},
+  'daemon:restart': {url: '/api/control/daemon/restart', confirm: 'デーモンを再起動しますか？'},
+  'ui:restart':     {url: '/api/control/ui/restart',     confirm: 'WebUIを再起動しますか？数秒間ページが切断されます。'},
+  'ui:stop':        {url: '/api/control/ui/stop',        confirm: 'WebUIを停止しますか？再起動は ./lucina.sh で行ってください。'},
+  'all:restart':    {url: '/api/control/all/restart',    confirm: 'デーモンとWebUIを再起動しますか？'},
+  'all:stop':       {url: '/api/control/all/stop',       confirm: 'デーモンとWebUIをすべて停止しますか？'},
+};
+
+function ctlDot(on) {
+  return '<span class="ctl-dot ' + (on ? 'on' : 'off') + '"></span>';
+}
+
+async function refreshControl() {
+  try {
+    const r = await fetch('/api/control/status');
+    const data = await r.json();
+    const d = data.daemon || {}, w = data.webui || {};
+    const supState = data.supervisor ? '有効' : '無効';
+    document.getElementById('ctl-daemon').innerHTML =
+      '<h3>デーモン</h3>' +
+      '<div class="ctl-status"><span>' + ctlDot(d.running) + '状態</span><span class="val">' + (d.running ? '起動中' : '停止') + '</span></div>' +
+      (d.pid ? '<div class="ctl-status"><span>PID</span><span class="val">' + d.pid + '</span></div>' : '') +
+      '<div class="ctl-status"><span>自動再起動 (スーパーバイザ)</span><span class="val">' + supState + '</span></div>';
+    document.getElementById('ctl-webui').innerHTML =
+      '<h3>WebUI</h3>' +
+      '<div class="ctl-status"><span>' + ctlDot(w.running) + '状態</span><span class="val">' + (w.running ? '起動中' : '停止') + '</span></div>' +
+      (w.pid ? '<div class="ctl-status"><span>PID</span><span class="val">' + w.pid + '</span></div>' : '') +
+      '<div class="ctl-status"><span>自動再起動 (スーパーバイザ)</span><span class="val">' + supState + '</span></div>';
+    const supervisorOn = !!data.supervisor;
+    document.querySelectorAll('#ctl-actions .ctl-btn').forEach(btn => {
+      const act = btn.dataset.act;
+      btn.disabled = false;
+      if (act === 'daemon:start' && d.running) btn.disabled = true;
+      if (act === 'daemon:stop' && !d.running) btn.disabled = true;
+      // Restart requires the supervisor to bring the process back; stop works without it.
+      if (act === 'daemon:restart' && (!d.running || !supervisorOn)) btn.disabled = true;
+      if ((act === 'ui:restart' || act === 'all:restart') && !supervisorOn) btn.disabled = true;
+    });
+  } catch (e) { /* ignore */ }
+}
+
+async function doControl(act) {
+  const def = CONTROL_ACTIONS[act];
+  if (!def) return;
+  if (def.confirm && !confirm(def.confirm)) return;
+  const msg = document.getElementById('ctl-msg');
+  msg.textContent = '送信中...';
+  try {
+    const r = await fetch(def.url, {method: 'POST'});
+    const data = await r.json();
+    msg.textContent = data.message || '実行しました';
+    setTimeout(() => { if (msg.textContent !== '送信中...') msg.textContent = ''; }, 8000);
+  } catch (e) {
+    msg.textContent = 'リクエスト失敗: ' + e;
+  }
+}
+
+document.querySelectorAll('#ctl-actions .ctl-btn').forEach(btn => {
+  btn.addEventListener('click', () => doControl(btn.dataset.act));
+});
+setInterval(refreshControl, 2000);
+setTimeout(refreshControl, 300);
 
 // ── Initial data loads ──
 setTimeout(() => { loadMemory(); }, 1000);

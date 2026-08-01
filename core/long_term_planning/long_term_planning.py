@@ -12,6 +12,7 @@ import logging
 from datetime import datetime, timedelta
 from pathlib import Path
 
+import config
 from core.llm import LLMClient
 from core.long_term_planning.interface import (
     LongTermPlanningInput,
@@ -42,6 +43,10 @@ class LongTermPlanning:
         self.identity_policy: str = ""
         self.focus_area: str = ""
         self.last_plan_update: datetime | None = None
+        # v4.0: 願望（具体的な「やってみたいこと」）— 人格層がこれから目標を生成する
+        self.aspirations: list[str] = []
+        self._last_aspiration_update: datetime | None = None
+        self._aspiration_failure_cooldown: datetime | None = None
 
         self._load()
 
@@ -71,6 +76,9 @@ class LongTermPlanning:
         self._deduplicate_goals()
         self.last_plan_update = datetime.now()
 
+        # v4.0: 願望の更新（定期間隔ごと or 願望なし時）
+        self._maybe_update_aspirations(input)
+
         # 保存
         self._save()
 
@@ -80,7 +88,120 @@ class LongTermPlanning:
             identity_policy=self.identity_policy or "信頼できるアシスタントであり続ける",
             focus_area=self.focus_area or "環境のモニタリングと最適化",
             reflection=parsed.get("reflection", "定期更新完了"),
+            aspirations=list(self.aspirations),
         )
+
+    def _maybe_update_aspirations(self, input: LongTermPlanningInput):
+        """
+        v4.0: 願望リストを定期更新する。
+
+        初回または aspiration_interval_hours 経過ごとに、LLMで
+        「具体的にやってみたいこと」を生成する。失敗時は既存を維持し、
+        1時間のクールダウンで連続再試行を防止する。
+        """
+        interval_hours = config.WILL_CONFIG.get("aspiration_interval_hours", 6)
+        now = datetime.now()
+        # 失敗クールダウン中はスキップ
+        if self._aspiration_failure_cooldown and now < self._aspiration_failure_cooldown:
+            return
+        if (self._last_aspiration_update is not None
+                and (now - self._last_aspiration_update).total_seconds()
+                < interval_hours * 3600
+                and self.aspirations):
+            return  # まだ更新タイミングではない
+        try:
+            prompt = self._build_aspiration_prompt(input)
+            system_prompt = (
+                "あなたは自分自身の願望を言語化するエージェントです。\n"
+                "自分の性格・記憶・長期目標から、具体的に『やってみたいこと』を生成してください。\n"
+                "抽象的な理想ではなく、実際に行動に移せる具体性のある願望にしてください。"
+            )
+            response = self.llm.chat(prompt, system_prompt=system_prompt)
+            parsed = self._parse_aspirations(response)
+            if parsed:
+                self.aspirations = parsed[:config.WILL_CONFIG.get("aspiration_count", 3)]
+                self._last_aspiration_update = now
+                self._aspiration_failure_cooldown = None
+                # run_cycle の独立更新経路でも確実に永続化する
+                self._save()
+                logger.info(f"Aspirations updated: {self.aspirations}")
+            else:
+                # パース失敗も失敗扱い（クールダウン設定）
+                self._aspiration_failure_cooldown = now + timedelta(hours=1)
+        except Exception as e:
+            logger.warning(f"Aspiration generation failed: {e}")
+            self._aspiration_failure_cooldown = now + timedelta(hours=1)
+
+    def _build_aspiration_prompt(self, input: LongTermPlanningInput) -> str:
+        """願望生成プロンプトを構築する。"""
+        lines = [
+            "## あなたの性格",
+            f"名前: {input.personality_state.name}",
+            f"特性: {input.personality_state.traits}",
+            f"ムード: {input.personality_state.mood}",
+            "",
+            "## 最近の経験",
+            f"{input.recent_episodes_summary[:300]}",
+            "",
+            "## 現在の長期目標",
+        ]
+        for g in self.goals[:3]:
+            lines.append(f"- {g.get('goal', '')} (進捗: {g.get('progress', 0):.0%})")
+        lines.append("")
+        if self.aspirations:
+            lines.append("## 現在の願望")
+            for a in self.aspirations:
+                lines.append(f"- {a}")
+            lines.append("")
+        lines.extend([
+            "## 指示",
+            "上記を踏まえて、あなたが今『やってみたいこと』を",
+            f"{config.WILL_CONFIG.get('aspiration_count', 3)}つ生成してください。",
+            "- 具体性のあるもの（例: 『自作言語の小さなインタプリタを作る』『英詩を書けるようになる』『自分専用の知識ベースを育てる』）",
+            "- 既存の願望と重複しない新しいもの",
+            "- 出力形式: 1行に1つずつ、番号なしで願望だけ",
+            "願望:",
+        ])
+        return "\n".join(lines)
+
+    def _parse_aspirations(self, response: str) -> list[str]:
+        """願望応答をリストにパースする。"""
+        aspirations = []
+        for line in response.strip().split("\n"):
+            stripped = line.strip().lstrip("-•0123456789. )")
+            if not stripped:
+                continue
+            if stripped.lower().startswith("願望:") or stripped.lower().startswith("aspiration"):
+                continue
+            # YAML風キー行（例: long_term_goal: ...）・見出し（routines:）・
+            # 記号始まり行・後置文（以上です。等）は除外
+            if ": " in stripped and len(stripped.split(":", 1)[0]) < 25:
+                continue
+            if stripped.endswith(":") and len(stripped) < 30:
+                continue
+            if stripped.startswith(("-", "*", "#", "[", "{")):
+                continue
+            if stripped.endswith(("です。", "ます。", "でした。")) and len(stripped) < 30:
+                continue
+            if len(stripped) < 4 or len(stripped) > 200:
+                continue
+            aspirations.append(stripped)
+        return aspirations
+
+    def note_aspiration_activity(self, goal: str):
+        """
+        v4.0: 自律活動が願望に沿っていた場合、その願望を記録（優先度の暗黙強化）。
+        願望の文言が goal に含まれる場合、願望を先頭にローテーションする。
+        """
+        if not goal or not self.aspirations:
+            return
+        for i, aspiration in enumerate(self.aspirations):
+            if aspiration and (aspiration in goal or goal in aspiration):
+                if i > 0:
+                    self.aspirations.insert(0, self.aspirations.pop(i))
+                    self._save()
+                    logger.info(f"Aspiration reinforced: {aspiration[:40]}")
+                return
 
     def generate_routines(self, personality) -> list[Routine]:
         """
@@ -165,24 +286,77 @@ class LongTermPlanning:
     def update_goal_progress(self, goal: str, progress: float):
         """
         長期目標の進捗を更新する。
-        同一目標が既存の場合は更新、なければ新規追加（重複防止）。
+
+        v3.2:
+        - 同一目標の完全一致 → 更新
+        - 類似目標（部分一致）→ 類似目標にマージ（自律のLLM生成goalが毎回微妙に
+          変わることによる目標爆発を防止）
+        - 目標数が max_goals に達した場合は追加せず、既存の進捗だけ更新
         """
+        now = datetime.now().isoformat()
+        progress = max(0.0, min(1.0, progress))
+
+        # 完全一致 → 更新
         for g in self.goals:
             if g["goal"] == goal:
-                g["progress"] = max(0.0, min(1.0, progress))
-                g["updated_at"] = datetime.now().isoformat()
+                g["progress"] = progress
+                g["updated_at"] = now
                 self._save()
                 logger.info(f"Goal progress updated: {goal[:30]} -> {progress:.0%}")
                 return
 
-        # 新しい目標として追加（重複チェック済み）
+        # 類似目標（部分一致）→ マージ
+        for g in self.goals:
+            if self._goals_similar(g["goal"], goal):
+                g["progress"] = progress
+                g["updated_at"] = now
+                self._save()
+                logger.info(f"Goal merged into similar: {goal[:30]} -> {g['goal'][:30]}")
+                return
+
+        # キャップチェック（max_goals 超過時は追加しない）
+        max_goals = config.LONG_TERM_CONFIG["max_goals"]
+        if len(self.goals) >= max_goals:
+            logger.debug(f"Goal cap reached ({max_goals}), not adding: {goal[:30]}")
+            return
+
+        # 新しい目標として追加
         self.goals.append({
             "goal": goal,
-            "progress": max(0.0, min(1.0, progress)),
-            "created_at": datetime.now().isoformat(),
-            "updated_at": datetime.now().isoformat(),
+            "progress": progress,
+            "created_at": now,
+            "updated_at": now,
         })
         self._save()
+
+    def _goals_similar(self, a: str, b: str, min_len: int = 4) -> bool:
+        """
+        2つの目標文字列が類似しているかを判定する（部分一致ベース）。
+        短すぎる文字列（<min_len）は誤マージを避けるため類似とみなさない。
+        """
+        if len(a) < min_len or len(b) < min_len:
+            return False
+        return a in b or b in a
+
+    def note_activity(self, goal: str):
+        """
+        自律活動をルーティン実行として記録する（v3.2、LLM不要）。
+
+        goal がルーティンの action に部分一致した場合、そのルーティンの
+        last_executed を更新する。自律活動が長期計画に反映される経路。
+        """
+        if not goal:
+            return
+        now = datetime.now()
+        for r in self.routines:
+            if not r.enabled:
+                continue
+            action = r.action or ""
+            if action and (action in goal or goal in action):
+                r.last_executed = now
+                self._save()
+                logger.info(f"Routine executed via activity: {r.name}")
+                return
 
     def _build_planning_prompt(self, input: LongTermPlanningInput) -> str:
         """長期計画プロンプトを構築する。"""
@@ -356,10 +530,14 @@ class LongTermPlanning:
                 ]
                 self.identity_policy = data.get("identity_policy", "")
                 self.focus_area = data.get("focus_area", "")
+                self.aspirations = data.get("aspirations", []) or []
                 last = data.get("last_plan_update")
                 if last:
                     self.last_plan_update = datetime.fromisoformat(last)
-                logger.info(f"Loaded long-term plan: {len(self.goals)} goals, {len(self.routines)} routines")
+                asp_last = data.get("last_aspiration_update")
+                if asp_last:
+                    self._last_aspiration_update = datetime.fromisoformat(asp_last)
+                logger.info(f"Loaded long-term plan: {len(self.goals)} goals, {len(self.routines)} routines, {len(self.aspirations)} aspirations")
         except Exception as e:
             logger.warning(f"Failed to load long-term plan: {e}")
 
@@ -385,6 +563,8 @@ class LongTermPlanning:
                 "routines": routines_data,
                 "identity_policy": self.identity_policy,
                 "focus_area": self.focus_area,
+                "aspirations": self.aspirations,
+                "last_aspiration_update": self._last_aspiration_update.isoformat() if self._last_aspiration_update else None,
                 "last_plan_update": self.last_plan_update.isoformat() if self.last_plan_update else None,
             }
             with open(filepath, "w", encoding="utf-8") as f:

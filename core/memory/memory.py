@@ -95,6 +95,9 @@ class Memory:
         """
         新しいエピソードを保存する。戻り値はエピソードID。
 
+        v3.2: 双方向リウェイトを適用（類似エピソードの繰り返しで既存の
+        類似エピソードの重要度を下げ、多様性圧力を双方向にする）。
+
         エッジケース:
         - 保存失敗: ファイル書き込みエラー時の再試行は行わずログ出力
         """
@@ -102,26 +105,75 @@ class Memory:
         if not episode.id:
             episode.id = f"ep_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}"
 
+        # 双方向リウェイト: 保存前に既存の類似エピソードを減点
+        self._reweight_duplicates(episode)
+
         self.episodes.append(episode)
 
         # JSONとして保存
         try:
             filepath = self.storage_path / f"{episode.id}.json"
             with open(filepath, "w", encoding="utf-8") as f:
-                json.dump({
-                    "id": episode.id,
-                    "timestamp": episode.timestamp.isoformat(),
-                    "event": episode.event,
-                    "context": episode.context,
-                    "emotion": episode.emotion,
-                    "result": episode.result,
-                    "importance": episode.importance,
-                    "tags": episode.tags,
-                }, f, ensure_ascii=False, indent=2)
+                json.dump(self._episode_to_dict(episode), f, ensure_ascii=False, indent=2)
         except Exception as e:
             logger.error(f"Failed to save episode {episode.id}: {e}")
 
         return episode.id
+
+    def _episode_to_dict(self, episode: Episode) -> dict:
+        """エピソードをJSON保存用dictに変換する。"""
+        return {
+            "id": episode.id,
+            "timestamp": episode.timestamp.isoformat(),
+            "event": episode.event,
+            "context": episode.context,
+            "emotion": episode.emotion,
+            "result": episode.result,
+            "importance": episode.importance,
+            "tags": episode.tags,
+            "source": getattr(episode, "source", "autonomous"),
+            "driving_drive": getattr(episode, "driving_drive", ""),
+        }
+
+    def _canonical_goal(self, event: str) -> str:
+        """
+        イベント記述から類似判定用の正規化キーを生成する。
+
+        助詞・補助動詞・空白を除去し、先頭12文字をキーにする。
+        """
+        if not event:
+            return ""
+        cleaned = event.strip().lower()
+        # 日本語の助詞・補助動詞を除去
+        for token in [" ", "　", "を", "の", "が", "に", "へ", "する", "したい", "たい"]:
+            cleaned = cleaned.replace(token, "")
+        return cleaned[:12]
+
+    def repetition_count(self, goal: str, window: int = 10) -> int:
+        """
+        直近window件のエピソードで、指定goalと類似する件数を返す。
+        """
+        key = self._canonical_goal(f"goal={goal}")
+        if not key:
+            return 0
+        recent = self.episodes[-window:]
+        return sum(1 for ep in recent if self._canonical_goal(ep.event) == key)
+
+    def _reweight_duplicates(self, new_episode: Episode, window: int = 10):
+        """
+        同一canonicalキーのエピソードが繰り返された場合、既存の類似
+        エピソードの重要度を 0.03 ずつ減点して永続化する（多様性確保）。
+        """
+        key = self._canonical_goal(new_episode.event)
+        if not key:
+            return
+        recent = self.episodes[-window:]
+        similar = [ep for ep in recent if self._canonical_goal(ep.event) == key]
+        if len(similar) >= 2:
+            for ep in similar:
+                if ep.importance > 0.05:
+                    ep.importance = max(0.0, ep.importance - 0.03)
+                    self._save_single(ep)
 
     def update_importance(self, episode_id: str, new_importance: float):
         """
@@ -217,6 +269,8 @@ class Memory:
                     result=data.get("result", ""),
                     importance=data.get("importance", 0.5),
                     tags=data.get("tags", []),
+                    source=data.get("source", "autonomous"),
+                    driving_drive=data.get("driving_drive", ""),
                 )
                 self.episodes.append(episode)
                 loaded += 1
@@ -229,16 +283,7 @@ class Memory:
         try:
             filepath = self.storage_path / f"{episode.id}.json"
             with open(filepath, "w", encoding="utf-8") as f:
-                json.dump({
-                    "id": episode.id,
-                    "timestamp": episode.timestamp.isoformat(),
-                    "event": episode.event,
-                    "context": episode.context,
-                    "emotion": episode.emotion,
-                    "result": episode.result,
-                    "importance": episode.importance,
-                    "tags": episode.tags,
-                }, f, ensure_ascii=False, indent=2)
+                json.dump(self._episode_to_dict(episode), f, ensure_ascii=False, indent=2)
         except Exception as e:
             logger.error(f"Failed to save episode {episode.id}: {e}")
 

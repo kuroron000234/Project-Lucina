@@ -28,11 +28,11 @@ class TestLearning:
     def _make_drive_snapshot(self) -> DriveOutput:
         return DriveOutput(
             drives={
-                "exploration": 0.5,
-                "social": 0.3,
-                "achievement": 0.4,
-                "rest": 0.2,
-                "maintenance": 0.2,
+                "exploration": 0.45,   # base 0.35 + memory空+0.1
+                "social": 0.35,
+                "achievement": 0.35,
+                "rest": 0.35,
+                "maintenance": 0.35,
             },
             primary_drive="exploration",
             drive_tension=0.2,
@@ -70,24 +70,28 @@ class TestLearning:
         """駆動調整値が最大調整量を超えない"""
         result = self.learning.learn(LearningInput(
             evaluation=self._make_evaluation(0.1),  # 非常に低い評価
-            evaluation_history=[self._make_evaluation(0.5).score for _ in range(10)],
+            evaluation_history=[self._make_evaluation(s).score for s in [0.3, 0.4, 0.5, 0.6, 0.7]],
             drive_snapshot=self._make_drive_snapshot(),
             episode_id="ep_001",
+            driving_drive="exploration",
         ))
         for name, delta in result.drive_adjustments.items():
             assert -0.2 <= delta <= 0.2, f"{name}={delta} exceeds clip limit"
 
-    def test_high_reward_increases_drives(self):
-        """高い報酬で駆動調整値が正になる"""
+    def test_high_reward_increases_primary_drive(self):
+        """高い報酬で主駆動（primary）が正の調整になる（ゼロサム）"""
         result = self.learning.learn(LearningInput(
             evaluation=self._make_evaluation(0.9),
-            evaluation_history=[self._make_evaluation(0.5).score for _ in range(5)],
+            evaluation_history=[self._make_evaluation(s).score for s in [0.3, 0.4, 0.5, 0.6, 0.7]],
             drive_snapshot=self._make_drive_snapshot(),
             episode_id="ep_001",
+            driving_drive="exploration",
         ))
-        for name, delta in result.drive_adjustments.items():
-            # 報酬が高い → 正の調整
-            assert delta >= 0, f"{name}={delta} should be positive"
+        assert result.drive_adjustments["exploration"] > 0
+        # ゼロサム: 合計は0
+        assert abs(sum(result.drive_adjustments.values())) < 1e-9
+        # 他の駆動は負（クレジット割り当て）
+        assert result.drive_adjustments["social"] < 0
 
     # --- 重要度更新テスト ---
 
