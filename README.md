@@ -5,7 +5,7 @@
 
 ---
 
-## 現行プロジェクト: lucina-NA （2025〜）
+## 現行プロジェクト: lucina-NA （2026〜）
 
 lucina-NA（Lucina New Agent）は、**10層の認知アーキテクチャ**を持つ完全ローカル動作の自律AIエージェントです。  
 Ollama + Gemma 4 をLLMバックエンドとし、Linux（RTX 4060 / 8GB VRAM）上で動作します。
