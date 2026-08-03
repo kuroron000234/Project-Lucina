@@ -18,7 +18,8 @@ Ollama + Gemma 4 をLLMバックエンドとし、Linux（RTX 4060 / 8GB VRAM）
 | **LLM** | Ollama (Gemma 4 e4b, ローカル, num_ctx 8192) |
 | **言語** | Python 3.14 |
 | **WebUI** | FastAPI + SSE + WebSocket（6タブ、デーモン制御対応） |
-| **テスト** | pytest 189 tests |
+| **テスト** | pytest 216 tests |
+| **検証** | `benchmarks/` — FEPサプライズ・アブレーション・記憶保持の3ベンチマーク |
 | **外部連携** | Opencode CLI（検索・コード解析・自己改変） |
 | **会話** | 日本語対応、WebSocketチャット、IPC通信（会話履歴保持） |
 | **起動** | `./lucina.sh` ワンクリック起動（スーパーバイザー付き自動再起動） |
@@ -40,6 +41,10 @@ python main.py --webui
 
 # テスト実行
 python -m pytest tests/ -v --tb=short
+
+# フェーズ3検証ベンチマーク（3本実行 → data/benchmarks/ に保存）
+python main.py --benchmark
+      # または: python -m benchmarks.run_all
 ```
 
 > **lucina.sh** はデーモンとWebUIの両方を監視します。終了コード42で再起動を要求、`data/run/*.wanted` フラグで常駐を制御します。デスクトップからは `lucina.desktop` で起動可能。
@@ -77,8 +82,13 @@ Environment → Memory → Drive → WorldModel → Personality → Planning →
 | **Plan** | 長期目標・ルーティン・アイデンティティ方針・願望・日記・ワークスペース |
 | **Control** | デーモン / WebUI の起動・停止・再起動（`data/ipc/control.json` 経由） |
 
-### 主要機能（v3.2〜v4.1）
+### 主要機能（v3.2〜v5.0）
 
+- **FEPサプライズ (v5.0)**: 世界モデルが実際にサプライズ信号を計算（`S = (x−μ)²/σ² + ln σ` のガウス近似による負の対数尤度）。高サプライズ時は駆動の新奇性と学習率が増幅（能動的推論のエピステミック価値）
+- **検証ベンチマーク (M14-M17)**: 実LLMを使わず決定論的な合成サイクルで「層が生きていること」を数字で証明
+  - **サプライズ検証**: 正確な予測で S→0、外れた予測でスパイク、低σほど鋭敏、駆動/学習層への反映、正規化
+  - **アブレーション検証**: 学習ON/OFFで駆動パラメータ軌跡の総変動が有意に変化（0.265 vs 0.082）、記憶ON/OFFで繰り返し検出と想起が機能、評価LLM/ルール整合性
+  - **記憶保持検証**: Recall@k（同一語句1.0・時刻非依存・重要度低下で喪失）、言い換えへの弱さを正直に定量化
 - **意志フェーズ (v4.0)**: 願望の生成（6時間ごと）、世界モデルによる「想像」、内言（なぜ選んだか）、夜の日記、達成時の能動発話、休息欲求に基づく拒否、主駆動選択のランダムジッタ
 - **自己モデル (v3.4)**: 記憶・評価履歴・長期計画を参照して「私は◯◯な存在」という自己認識を生成・永続化
 - **コスト段階化学習 (v3.2)**: 新奇性スコアに応じてルールベース学習（tier2）とLLM評価（tier3）を切り替え
@@ -153,8 +163,9 @@ Project-Lucina/
 │
 ├── environment/                # 環境観測
 ├── webui/                      # WebUI（FastAPI、6タブ）
+├── benchmarks/                 # 検証ベンチマーク（予測・アブレーション・記憶）
 ├── docs/                       # 仕様書・ナレッジインデックス
-├── tests/                      # テスト（189 tests）
+├── tests/                      # テスト（216 tests）
 │
 └── archive/
     ├── v1-lucina/              # Monica Core（初代）

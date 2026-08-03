@@ -460,7 +460,184 @@ class TestWorldModelError:
 
 # ── F. 学習 vs 減衰（有界性） ────────────────────────────────
 
-class TestLearningVsDecay:
+# ── G. Phase 3: run_cycle のサプライズ配線 ───────────────────
+
+class _StubPersonality:
+    """run_cycle 用の最小人格スタブ（decide/update のみ）"""
+
+    def __init__(self):
+        from core.personality.interface import PersonalityState
+        self.state = PersonalityState(
+            name="Lucina", traits={}, speaking_style="", values=[],
+            mood="neutral", relationship={"familiarity": 0.3, "trust": 0.5},
+        )
+
+    def decide(self, input):
+        return _make_decision()
+
+    def update_state(self, episode, overall=None):
+        pass
+
+    def update_self_model(self, **kwargs):
+        pass
+
+    def speak(self, intent: str) -> str:
+        return intent
+
+
+class _StubPlanning:
+    def make(self, input):
+        from core.planning.interface import PlanningOutput, Step
+        return PlanningOutput(
+            plan_id="bench",
+            steps=[Step(order=1, action="workspace_list", params={},
+                        description="", expected_result="")],
+            expected_outcome="ok",
+        )
+
+
+class _StubAgent:
+    TOOL_REGISTRY = {}
+
+    def execute(self, input):
+        return _make_result(success=True)
+
+    def speak(self, text: str) -> str:
+        return text
+
+
+class _StubLTP:
+    """run_cycle 用の最小長期計画スタブ。"""
+
+    def __init__(self):
+        self.aspirations = []
+        self.focus_area = "test"
+        self.identity_policy = "test policy"
+        self.last_plan_update = None
+        self._last_aspiration_update = None
+
+    def plan(self, input):
+        from core.long_term_planning.interface import LongTermPlanningOutput
+        return LongTermPlanningOutput(
+            long_term_goal="test", routines=[],
+            identity_policy="test policy", focus_area="test", reflection="",
+        )
+
+    def _maybe_update_aspirations(self, input):
+        pass
+
+    def update_goal_progress(self, goal, overall):
+        pass
+
+    def note_activity(self, goal):
+        pass
+
+    def note_aspiration_activity(self, goal):
+        pass
+
+
+class _SpyLearning(Learning):
+    """学習層に渡されたサプライズを記録するスパイ。"""
+
+    def __init__(self):
+        super().__init__()
+        self.last_surprise = None
+
+    def learn(self, input):
+        self.last_surprise = getattr(input, "surprise", None)
+        return super().learn(input)
+
+
+class TestRunCycleSurpriseWiring:
+    """Phase 3 (M14): run_cycle のサプライズ配線の統合テスト。
+
+    forced_tier=2 で実LLMを回避し（ルールベース評価 + ルール世界モデル）、
+    personality/planning/agent/ltp のみスタブ化する。
+    """
+
+    def _setup(self, tmp_path):
+        env = _make_env()
+        memory = Memory(storage_path=str(tmp_path / "episodes"))
+        drive = Drive()
+        personality = _StubPersonality()
+        planning = _StubPlanning()
+        agent = _StubAgent()
+        evaluation = Evaluation(llm_client=None, storage_path=None)
+        learning = _SpyLearning()
+        world_model = WorldModel(llm_client=None)
+        ltp = _StubLTP()
+        scheduler = main_mod.CycleScheduler()
+        return (env, memory, drive, personality, planning, agent,
+                evaluation, learning, world_model, ltp, scheduler)
+
+    def test_run_cycle_returns_tuple_with_surprise(self, tmp_path, monkeypatch):
+        """run_cycle が (output, surprise) タプルを返し、surprise が 0..1 に収まる。"""
+        (env, memory, drive, personality, planning, agent,
+         evaluation, learning, world_model, ltp, scheduler) = self._setup(tmp_path)
+        monkeypatch.setattr(main_mod, "CYCLE_LOG_PATH",
+                            str(tmp_path / "cycle_latest.json"))
+
+        env_state = _make_env()
+        drive_state = _make_drive_output()
+        from core.memory.interface import MemoryOutput
+        memory_ctx = MemoryOutput(
+            episodes=[], summary="まだ記憶がありません", total_count=0,
+        )
+
+        output, surprise = main_mod.run_cycle(
+            env, memory, drive, personality, planning, agent,
+            evaluation, learning, world_model, ltp, scheduler,
+            env_state=env_state, drive_state=drive_state,
+            memory_ctx=memory_ctx, forced_tier=2,
+        )
+
+        assert output is None  # 自律サイクルで会話なし
+        assert surprise is not None
+        assert isinstance(surprise, float)
+        assert 0.0 <= surprise <= 1.0
+
+    def test_surprise_reaches_learning_input(self, tmp_path, monkeypatch):
+        """実測サプライズが LearningInput.surprise に渡される。"""
+        (env, memory, drive, personality, planning, agent,
+         evaluation, learning, world_model, ltp, scheduler) = self._setup(tmp_path)
+        monkeypatch.setattr(main_mod, "CYCLE_LOG_PATH",
+                            str(tmp_path / "cycle_latest.json"))
+        from core.memory.interface import MemoryOutput
+        memory_ctx = MemoryOutput(
+            episodes=[], summary="まだ記憶がありません", total_count=0,
+        )
+
+        main_mod.run_cycle(
+            env, memory, drive, personality, planning, agent,
+            evaluation, learning, world_model, ltp, scheduler,
+            env_state=_make_env(), drive_state=_make_drive_output(),
+            memory_ctx=memory_ctx, forced_tier=2,
+        )
+
+        # tier2 + 世界モデル予測あり → 学習層に float のサプライズが渡る
+        assert learning.last_surprise is not None
+        assert 0.0 <= learning.last_surprise <= 1.0
+
+    def test_surprise_feeds_next_drive_generation(self, tmp_path, monkeypatch):
+        """前サイクルのサプライズが次サイクルの DriveInput.surprise になる。"""
+        (env, memory, drive, personality, planning, agent,
+         evaluation, learning, world_model, ltp, scheduler) = self._setup(tmp_path)
+        monkeypatch.setattr(main_mod, "CYCLE_LOG_PATH",
+                            str(tmp_path / "cycle_latest.json"))
+        from core.memory.interface import MemoryOutput
+        memory_ctx = MemoryOutput(
+            episodes=[], summary="まだ記憶がありません", total_count=0,
+        )
+
+        _, surprise = main_mod.run_cycle(
+            env, memory, drive, personality, planning, agent,
+            evaluation, learning, world_model, ltp, scheduler,
+            env_state=_make_env(), drive_state=_make_drive_output(),
+            memory_ctx=memory_ctx, forced_tier=2,
+            surprise=0.42,
+        )
+        assert 0.0 <= surprise <= 1.0
+
     def test_zero_sum_keeps_base_sum_bounded(self):
         """ゼロサム調整を100サイクル適用しても駆動base合計は発散しない"""
         d = Drive()

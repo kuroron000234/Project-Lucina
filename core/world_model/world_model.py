@@ -8,6 +8,7 @@ Phase 2 Step 3: LLMシミュレーション（最小実装）
 """
 
 import logging
+import math
 
 import config
 from core.llm import LLMClient
@@ -236,6 +237,39 @@ class WorldModel:
 
         return predictions
 
+    @staticmethod
+    def normalize_surprise(surprise: float) -> float:
+        """
+        v5.0: サプライズ値を 0.0〜1.0 に正規化する（単調写像 s/(1+s)）。
+        """
+        s = max(0.0, float(surprise))
+        return s / (1.0 + s)
+
+    def compute_surprise(self, actual_reward: float, prediction: Prediction) -> float:
+        """
+        v5.0: 観測後のサプライズ（実測された予測誤差）を計算する。
+
+        FEPにおける負の対数尤度 −ln p(x | prediction) のガウス近似:
+            S = (x − μ)² / σ² + ln σ
+        - μ = expected_reward（-1..1 を 0..1 に変換）
+        - x = 実際の評価値（0..1）
+        - σ = prediction.uncertainty（SURPRISE_CONFIG.sigma_floor で下限クランプ）
+
+        予測が当たっていれば S → 0（正確）、外れれば大きくなる（不確実）。
+        高サプライズ = 学ぶべき・探索すべき時（能動的推論のエピステミック価値）。
+
+        注意: max(0, ·) のクランプにより、|x−μ| が小さい誤差は0になる
+        （デッドゾーン）。σ=0.3 では |x−μ| ≲ 0.33 の誤差は黙殺される。
+        """
+        mu = max(0.0, min(1.0, (prediction.expected_reward + 1.0) / 2.0))
+        sigma = max(
+            config.SURPRISE_CONFIG["sigma_floor"],
+            getattr(prediction, "uncertainty", config.SURPRISE_CONFIG["default_sigma"]),
+        )
+        x = max(0.0, min(1.0, float(actual_reward)))
+        surprise = ((x - mu) ** 2) / (sigma ** 2) + math.log(sigma)
+        return max(0.0, surprise)
+
     def update(self, actual: "Episode", prediction: Prediction,
                actual_overall: float | None = None):
         """
@@ -318,6 +352,7 @@ class WorldModel:
         lines.append("  probability: <0.0〜1.0>")
         lines.append("  expected_reward: <-1.0〜1.0>")
         lines.append("  risk_level: low|medium|high")
+        lines.append("  uncertainty: <0.0〜1.0>  (予測の不確実性。小さいほど確信)")
         lines.append("  reasoning: <理由>")
 
         return "\n".join(lines)
@@ -350,6 +385,11 @@ class WorldModel:
                         current_pred["expected_reward"] = 0.0
                 elif stripped.startswith("risk_level:"):
                     current_pred["risk_level"] = stripped.split(":", 1)[1].strip()
+                elif stripped.startswith("uncertainty:"):
+                    try:
+                        current_pred["uncertainty"] = float(stripped.split(":", 1)[1].strip())
+                    except ValueError:
+                        pass
                 elif stripped.startswith("reasoning:"):
                     current_pred["reasoning"] = stripped.split(":", 1)[1].strip()
 
@@ -370,6 +410,10 @@ class WorldModel:
                 if data.get("risk_level", "low") in ["low", "medium", "high"]
                 else "low",
             reasoning=data.get("reasoning", ""),
+            uncertainty=max(
+                config.SURPRISE_CONFIG["sigma_floor"],
+                min(1.0, float(data.get("uncertainty", config.SURPRISE_CONFIG["default_sigma"]))),
+            ),
         )
 
     def _rule_based_predict(self, action: str, env: "EnvironmentOutput") -> list[Prediction]:

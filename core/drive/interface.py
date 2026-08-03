@@ -35,6 +35,8 @@ class DriveInput:
     environment: "EnvironmentOutput"
     memory_summary: str
     adjustments: dict[str, float] | None = None
+    # v5.0: Phase 3 — 実測されたサプライズ（正規化済み 0.0〜1.0）。新奇性に反映
+    surprise: float | None = None
 
 
 @dataclass

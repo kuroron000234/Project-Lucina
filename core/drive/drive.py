@@ -134,6 +134,17 @@ class Drive:
             input.environment, drive_tension, self._deficit_cycles
         )
 
+        # v5.0: Phase 3 — 実測サプライズ（予測誤差）を新奇性に反映
+        # 内部テンション・探索不足などのヒューリスティックな代理値に加えて、
+        # 世界モデルの予測が実際に外れた量（正規化済み 0.0〜1.0）をブレンドする。
+        if input.surprise is not None:
+            blend = config.SURPRISE_CONFIG.get("novelty_blend", 0.4)
+            surprise_norm = max(0.0, min(1.0, float(input.surprise)))
+            novelty_score = min(
+                1.0,
+                (1.0 - blend) * novelty_score + blend * surprise_norm,
+            )
+
         return DriveOutput(
             drives=drives,
             primary_drive=primary,

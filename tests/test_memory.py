@@ -175,3 +175,62 @@ class TestMemory:
         result = self.memory.search(MemoryInput(query="何か"))
         assert result.summary == "まだ記憶がありません"
         assert result.total_count == 0
+
+    # --- v5.0: ハイブリッド検索（言い換え・表記揺れ対応） ---
+
+    def test_hybrid_matches_paraphrase(self):
+        """完全一致しない言い換えクエリが n-gram 類似度でヒットする。"""
+        ep = self._create_episode(
+            "goal=量子もつれの仕組みを調査する",
+            context="量子もつれと重ね合わせについて調べた",
+            tags=["探検", "量子"],
+        )
+        self.memory.save(ep)
+
+        # 完全一致しないがバイグラムを共有する言い換え
+        result = self.memory.search(MemoryInput(query="量子もつれの概要"))
+        assert any(e.id == ep.id for e in result.episodes)
+
+    def test_hybrid_disabled_preserves_old_behavior(self):
+        """use_hybrid=False なら従来通り完全一致のみ（ベンチマーク比較用）。"""
+        ep = self._create_episode(
+            "goal=量子もつれの仕組みを調査する",
+            context="量子もつれと重ね合わせについて調べた",
+            tags=["探検", "量子"],
+        )
+        self.memory.save(ep)
+
+        result = self.memory.search(MemoryInput(
+            query="量子もつれの概要", use_hybrid=False,
+        ))
+        assert len(result.episodes) == 0
+
+    def test_hybrid_no_false_positive_on_unrelated(self):
+        """共有バイグラムが無いクエリはヒットしない（閾値フィルタ）。"""
+        ep = self._create_episode("goal=ファイル探索を完了する")
+        self.memory.save(ep)
+
+        result = self.memory.search(MemoryInput(query="存在しないクエリxyz"))
+        assert len(result.episodes) == 0
+
+    def test_hybrid_keyword_still_dominates(self):
+        """完全一致ヒットは類似度のみより優先される（スコア順ソート）。"""
+        ep_exact = self._create_episode("重要度が高い記憶", importance=0.3)
+        ep_partial = self._create_episode(
+            "まったく別のことを調べる", importance=0.9,
+            context="重要度の概念について",
+        )
+        self.memory.save(ep_exact)
+        self.memory.save(ep_partial)
+
+        result = self.memory.search(MemoryInput(query="重要度"))
+        # 完全一致（重要度が高い記憶）が部分一致より先に来る
+        assert result.episodes[0].id == ep_exact.id
+
+    def test_hybrid_ngram_helpers(self):
+        """n-gram ヘルパーの基本挙動。"""
+        assert Memory._char_ngrams("量子", 2) == {"量子"}
+        assert Memory._char_ngrams("", 2) == set()
+        s = Memory._ngram_similarity({"量子"}, "量子もつれ", 2)
+        assert 0.0 < s < 1.0
+        assert Memory._ngram_similarity({"量子"}, "星を眺める", 2) == 0.0

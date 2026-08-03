@@ -78,9 +78,15 @@ class Learning:
                                       config.LEARNING_CONFIG.get("variance_gate", 0.02))
         drive_adjustments = {}
         if variance >= variance_gate:
+            # v5.0: Phase 3 — サプライズによる学習率変調。
+            # 予測が外れた（高サプライズ）時は学ぶべき時なので学習率を上げる。
+            effective_lr = self._modulated_learning_rate(
+                getattr(input, "surprise", None)
+            )
             drive_adjustments = self._compute_drive_adjustments(
                 input.evaluation, same_type, input.drive_snapshot,
                 input.driving_drive, input.source,
+                learning_rate=effective_lr,
             )
 
         # エピソード重要度更新
@@ -137,10 +143,25 @@ class Learning:
         """
         return self.learning_curve
 
+    def _modulated_learning_rate(self, surprise: float | None) -> float:
+        """
+        v5.0: サプライズに応じて学習率を変調する（高サプライズ = 学習率上昇）。
+
+        effective = min(base * (1 + modulation * surprise), base * cap)
+        surprise は正規化済み 0.0〜1.0 を想定。None なら変調しない。
+        """
+        if surprise is None:
+            return self.learning_rate
+        s = max(0.0, min(1.0, float(surprise)))
+        mod = 1.0 + config.SURPRISE_CONFIG.get("learning_modulation", 1.5) * s
+        cap = config.SURPRISE_CONFIG.get("learning_modulation_cap", 2.0)
+        return min(self.learning_rate * mod, self.learning_rate * cap)
+
     def _compute_drive_adjustments(self, evaluation: Any, history: list,
                                    drive_snapshot: Any,
                                    driving_drive: str | None = None,
-                                   source: str = "autonomous") -> dict[str, float]:
+                                   source: str = "autonomous",
+                                   learning_rate: float | None = None) -> dict[str, float]:
         """
         駆動調整値を計算する（v3.2: ゼロサム・クレジット割り当て）。
 
@@ -163,7 +184,8 @@ class Learning:
         if target not in drive_snapshot.drives:
             target = drive_snapshot.primary_drive
 
-        delta = self.learning_rate * (reward - avg_reward)
+        lr = learning_rate if learning_rate is not None else self.learning_rate
+        delta = lr * (reward - avg_reward)
         delta = max(-self.max_adjustment, min(self.max_adjustment, delta))
 
         # ゼロサム割り当て: 主駆動 +delta、他駆動 -delta/4

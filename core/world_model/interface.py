@@ -9,6 +9,8 @@ class Prediction:
     expected_reward: float
     risk_level: str
     reasoning: str
+    # v5.0: Phase 3 — 予測の不確実性 σ（サプライズ計算 S=(x−μ)²/σ²+ln σ に使用）
+    uncertainty: float = 0.3
 
 
 @dataclass

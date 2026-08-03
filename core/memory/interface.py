@@ -31,6 +31,9 @@ class MemoryInput:
     top_k: int = 5
     min_importance: float = 0.0
     time_range: tuple[datetime, datetime] | None = None
+    # v5.0: Phase 3 — ハイブリッド検索（キーワード + n-gram類似度）のON/OFF。
+    # False にすると従来のキーワード完全一致のみ（ベンチマーク比較用）
+    use_hybrid: bool = True
 
 
 @dataclass

@@ -32,6 +32,9 @@ class PersonalityInput:
     imagined_futures: list | None = None
     # 自分の部屋（自由に使えるワークスペースのパス）
     workspace_hint: str = ""
+    # v5.0: Phase 3 — 直近の実測サプライズ（予測誤差 0.0〜1.0）。
+    # 行動選択のバイアスとしてプロンプトに注入する（能動的推論: 高サプライズ=探索）
+    surprise: float | None = None
 
 
 @dataclass

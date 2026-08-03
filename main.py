@@ -263,7 +263,7 @@ def _cached_memory_search(memory, env_state, cache: dict):
 
 def _save_cycle_details(phase, env_state, drive_state, decision, plan,
                         result, eval_result=None, learn_result=None,
-                        user_message=None):
+                        user_message=None, surprise=None):
     """Save detailed cycle data to IPC file for WebUI consumption."""
     try:
         data = {
@@ -282,6 +282,8 @@ def _save_cycle_details(phase, env_state, drive_state, decision, plan,
                 "primary": drive_state.primary_drive,
                 "tension": round(drive_state.drive_tension, 3),
                 "novelty": round(drive_state.novelty_score, 3),
+                # v5.0: Phase 3 — 実測サプライズ（WebUI 表示用）
+                "surprise": round(surprise, 3) if surprise is not None else None,
             },
             "decision": {
                 "goal": decision.goal,
@@ -409,7 +411,8 @@ def _get_fallback_long_term(ltp):
 def run_cycle(env, memory, drive, personality, planning, agent,
               evaluation, learning_obj, world_model, ltp, scheduler,
               user_message=None, memory_ctx=None, env_state=None,
-              drive_state=None, forced_tier=None, conversation_history=None):
+              drive_state=None, forced_tier=None, conversation_history=None,
+              surprise=None):
     """
     v3.2 統合サイクル: コスト段階（tier）に応じて実行する層が変わる。
 
@@ -418,6 +421,12 @@ def run_cycle(env, memory, drive, personality, planning, agent,
     - tier3: LLM評価 + LLM世界モデル
 
     ユーザー入力は常に tier3。自律は CycleScheduler が新奇性/定期で判定。
+
+    戻り値 (v5.0): (output, surprise) のタプル。
+    - output: 発話テキスト or None（会話時のみ非None）
+    - surprise: このサイクルで実測された正規化サプライズ（0.0〜1.0）。
+      tier>=2 かつ世界モデル予測がある場合のみ float、それ以外は None。
+      デーモンループが次サイクルの駆動・人格入力として引き継ぐ。
     """
     if env_state is None:
         env_state = env.observe(EnvironmentInput(
@@ -441,6 +450,8 @@ def run_cycle(env, memory, drive, personality, planning, agent,
         drive_state = drive.generate(DriveInput(
             environment=env_state,
             memory_summary=memory_ctx.summary,
+            # v5.0: Phase 3 — 前サイクルで実測されたサプライズを新奇性に反映
+            surprise=surprise,
         ))
 
     tier = forced_tier if forced_tier is not None \
@@ -525,6 +536,8 @@ def run_cycle(env, memory, drive, personality, planning, agent,
         aspirations=aspirations,
         imagined_futures=imagined,
         workspace_hint=workspace_hint,
+        # v5.0: Phase 3 — 直近のサプライズを行動選択のバイアスとして注入
+        surprise=surprise,
     ))
 
     plan, result = _make_and_execute(agent, decision, planning, prev_world_pred)
@@ -546,6 +559,7 @@ def run_cycle(env, memory, drive, personality, planning, agent,
 
     eval_result = None
     learn_result = None
+    cycle_surprise = None  # v5.0: Phase 3 — このサイクルで実測されたサプライズ
     if tier >= 2:
         # 評価（tier3 のみ LLM。tier2 はルールベースでコスト抑制）
         # v4.0.3: チャット時はルールベース評価（対話は squash で重要度を圧縮する
@@ -556,6 +570,17 @@ def run_cycle(env, memory, drive, personality, planning, agent,
             use_llm=(tier >= 3 and not user_message),
         ))
 
+        # v5.0: サプライズ = 実測された予測誤差（世界モデル予測 vs 実際の評価値）。
+        # 世界モデルは tier>=2 でのみ予測するため、その場合のみ計算される。
+        # 期待報酬（-1..1）を 0..1 に変換するのは compute_surprise 内部で行う。
+        if prev_world_pred and prev_world_pred.predictions:
+            cycle_surprise = world_model.normalize_surprise(
+                world_model.compute_surprise(
+                    actual_reward=eval_result.score.overall,
+                    prediction=prev_world_pred.predictions[0],
+                )
+            )
+
         # 学習（driving_drive=rest の trivial 行動は学習対象外）
         if driving_drive != "rest":
             learn_result = learning_obj.learn(LearningInput(
@@ -565,6 +590,8 @@ def run_cycle(env, memory, drive, personality, planning, agent,
                 episode_id=episode.id,
                 driving_drive=driving_drive,
                 source=source,
+                # v5.0: 高サプライズ時は学習率を上げる（学ぶべき時）
+                surprise=cycle_surprise,
             ))
         if learn_result and learn_result.drive_adjustments:
             drive.update_parameters(learn_result.drive_adjustments)
@@ -618,7 +645,7 @@ def run_cycle(env, memory, drive, personality, planning, agent,
         env_state=env_state, drive_state=drive_state,
         decision=decision, plan=plan, result=result,
         eval_result=eval_result, learn_result=learn_result,
-        user_message=user_message,
+        user_message=user_message, surprise=cycle_surprise,
     )
 
     has_conversation = bool(user_message and decision.conversation_intent)
@@ -632,9 +659,9 @@ def run_cycle(env, memory, drive, personality, planning, agent,
     if has_conversation:
         # v4.0: 拒否 — 休息欲求・不機嫌時に理由付きで先延ばしを提案
         if decision.refusal and decision.refusal_reason:
-            return f"{decision.refusal_reason}（今は少し休ませてください）"
-        return decision.direct_instruction or decision.goal
-    return None
+            return (f"{decision.refusal_reason}（今は少し休ませてください）", cycle_surprise)
+        return (decision.direct_instruction or decision.goal, cycle_surprise)
+    return (None, cycle_surprise)
 
 
 def run_phase2_cycle(env, memory, drive, personality, planning, agent,
@@ -642,9 +669,12 @@ def run_phase2_cycle(env, memory, drive, personality, planning, agent,
                      user_message=None):
     """Full Phase 2 cycle (forced tier3) — CLI互換ラッパー。"""
     scheduler = CycleScheduler()
-    return run_cycle(env, memory, drive, personality, planning, agent,
-                     evaluation, learning_obj, world_model, ltp, scheduler,
-                     user_message=user_message, forced_tier=3)
+    output, _surprise = run_cycle(
+        env, memory, drive, personality, planning, agent,
+        evaluation, learning_obj, world_model, ltp, scheduler,
+        user_message=user_message, forced_tier=3,
+    )
+    return output
 
 
 def _maybe_proactive_speak(personality, ltp, memory, last_proactive_ts):
@@ -751,6 +781,8 @@ def daemon_loop(env, memory, drive, personality, planning, agent,
     scheduler = CycleScheduler()
     mem_cache: dict = {}
     logger.info("Daemon started. Listening for messages and running autonomously.")
+    # v5.0: Phase 3 — 前サイクルで実測されたサプライズ（次サイクルの駆動・選択に反映）
+    prev_surprise = None
     # v4.0: 能動発話・日記の状態
     last_proactive_ts = None
     last_diary_date = None
@@ -779,12 +811,14 @@ def daemon_loop(env, memory, drive, personality, planning, agent,
             if user_msg:
                 consecutive_idle = 0
                 logger.info(f"IPC message: {user_msg[:60]}")
-                output = run_cycle(
+                output, cycle_surprise = run_cycle(
                     env, memory, drive, personality, planning, agent,
                     evaluation, learning_obj, world_model, ltp, scheduler,
                     user_message=user_msg,
                     conversation_history=history,
+                    surprise=prev_surprise,
                 )
+                prev_surprise = cycle_surprise
                 if output:
                     agent.speak(output)
                     ipc.write_output(output, ipc_msg[1])
@@ -799,6 +833,8 @@ def daemon_loop(env, memory, drive, personality, planning, agent,
                 drive_state = drive.generate(DriveInput(
                     environment=env_state,
                     memory_summary=memory_ctx.summary,
+                    # v5.0: 前サイクルのサプライズを新奇性に反映
+                    surprise=prev_surprise,
                 ))
                 max_drive = max(drive_state.drives.values()) if drive_state.drives else 0
 
@@ -811,12 +847,14 @@ def daemon_loop(env, memory, drive, personality, planning, agent,
                         continue
                     consecutive_idle = 0
                     logger.info(f"Autonomous: primary={drive_state.primary_drive}, max={max_drive:.2f}")
-                    output = run_cycle(
+                    output, cycle_surprise = run_cycle(
                         env, memory, drive, personality, planning, agent,
                         evaluation, learning_obj, world_model, ltp, scheduler,
                         env_state=env_state, drive_state=drive_state,
                         memory_ctx=memory_ctx,
+                        surprise=prev_surprise,
                     )
+                    prev_surprise = cycle_surprise
                     if output:
                         ipc.write_output(f"[Auto] {output}")
                 else:
@@ -842,6 +880,7 @@ def daemon_loop(env, memory, drive, personality, planning, agent,
                 drive_state = drive.generate(DriveInput(
                     environment=env_state,
                     memory_summary=_cached_memory_search(memory, env_state, mem_cache).summary,
+                    surprise=prev_surprise,
                 ))
                 try:
                     p_state = personality.state
@@ -936,6 +975,8 @@ def main():
     parser.add_argument("--validate", action="store_true", help="検証モード")
     parser.add_argument("--message", type=str, help="ユーザーメッセージ")
     parser.add_argument("--webui", action="store_true", help="WebUI起動")
+    parser.add_argument("--benchmark", action="store_true",
+                        help="Phase 3: ベンチマーク（サプライズ/アブレーション/記憶）を実行")
     args = parser.parse_args()
 
     env = Environment()
@@ -965,6 +1006,12 @@ def main():
             print(f"\n[Lucina] {output}\n")
         else:
             print("\n(task completed)\n")
+        return
+
+    # --benchmark: Phase 3 検証レポート生成（M15-M17）
+    if args.benchmark:
+        from benchmarks.run_all import run_all
+        run_all()
         return
 
     # --webui: start web interface

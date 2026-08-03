@@ -41,6 +41,7 @@ IPC_DIR = Path("data/ipc")
 EPISODE_DIR = Path("data/episodes")
 LOG_PATH = Path("data/logs/system.log")
 LTP_PATH = Path("data/long_term_plan.json")
+BENCHMARK_DIR = Path("data/benchmarks")
 
 _log_ring = []
 
@@ -296,9 +297,20 @@ async def api_status():
         pers = data.get("personality", {})
         plan = data.get("plan", {})
         env_p = data.get("env_cpu")
+        # v5.0: サプライズは cycle_latest.json の drive.surprise から供給する
+        # （実測予測誤差。tier2/3 サイクルでのみ値を持つ）
+        surprise = None
+        cycle_path = IPC_DIR / "cycle_latest.json"
+        if cycle_path.exists():
+            try:
+                with open(cycle_path) as f:
+                    surprise = json.load(f).get("drive", {}).get("surprise")
+            except (json.JSONDecodeError, OSError):
+                pass
         return {
             "drives": drives,
             "primary_drive": data.get("primary_drive"),
+            "surprise": surprise,
             "personality": pers,
             "memory": {
                 "episodes": data.get("memory_episodes", 0),
@@ -547,6 +559,35 @@ async def api_workspace():
         return {"files": files}
     except OSError:
         return {"files": []}
+
+
+# ── v5.0: Phase 3 ベンチマーク（data/benchmarks/*.json）──
+@app.get("/api/benchmarks")
+async def api_benchmarks():
+    if not BENCHMARK_DIR.exists():
+        return {"reports": [], "generated_at": None}
+    reports = []
+    try:
+        for f in sorted(BENCHMARK_DIR.glob("*.json")):
+            try:
+                reports.append(json.loads(f.read_text(encoding="utf-8")))
+            except (json.JSONDecodeError, OSError):
+                continue
+    except OSError:
+        pass
+    return {"reports": reports}
+
+
+@app.post("/api/benchmarks/run")
+async def api_benchmarks_run():
+    """ベンチマークを再実行する（決定論的・実LLM不使用・数秒で完了）。"""
+    try:
+        from benchmarks.run_all import run_all
+        ok = run_all()
+        return {"ok": bool(ok), "message": "ベンチマーク再実行が完了しました"}
+    except Exception as e:
+        logger.warning(f"Benchmark run failed: {e}")
+        return {"ok": False, "message": f"実行失敗: {e}"}
 
 
 # ── Read latest cycle details from IPC ──

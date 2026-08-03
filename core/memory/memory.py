@@ -10,6 +10,7 @@ import logging
 from datetime import datetime
 from pathlib import Path
 
+import config
 from core.memory.interface import (
     Episode,
     EpisodeSummary,
@@ -54,36 +55,53 @@ class Memory:
                 total_count=len(self.episodes),
             )
 
-        # キーワードマッチング
+        # v5.0: ハイブリッド検索（キーワード完全一致 + 文字n-gram類似度）
+        # 記憶保持ベンチマークで実測された弱点（言い換え・表記揺れで0ヒット）を
+        # 改善する。キーワードヒットは常に採用し、類似度のみのヒットは閾値以上のみ。
         query_lower = input.query.lower()
-        results = []
+        hybrid_cfg = config.MEMORY_CONFIG.get("hybrid", {})
+        use_hybrid = input.use_hybrid and hybrid_cfg.get("enabled", True)
+        n = int(hybrid_cfg.get("n_gram_size", 2))
+        sim_weight = float(hybrid_cfg.get("similarity_weight", 1.0))
+        min_sim = float(hybrid_cfg.get("min_similarity", 0.25))
+        max_full = int(hybrid_cfg.get("max_episodes_full_scan", 5000))
+        query_ngrams = self._char_ngrams(query_lower, n) if use_hybrid else None
+
+        scored = []
         for ep in self.episodes:
-            # イベント記述・コンテキスト・タグでマッチング
-            if (
+            # 時間範囲フィルタ
+            if input.time_range:
+                start, end = input.time_range
+                if not (start <= ep.timestamp <= end):
+                    continue
+            # 重要度フィルタ
+            if ep.importance < input.min_importance:
+                continue
+
+            # イベント記述・コンテキスト・タグでの完全一致
+            keyword = (
                 query_lower in ep.event.lower()
                 or query_lower in ep.context.lower()
                 or query_lower in ep.result.lower()
                 or any(query_lower in tag.lower() for tag in ep.tags)
-            ):
-                results.append(ep)
+            )
 
-        # 時間範囲フィルタ
-        if input.time_range:
-            start, end = input.time_range
-            results = [
-                ep for ep in results
-                if start <= ep.timestamp <= end
-            ]
+            if use_hybrid and query_ngrams and len(self.episodes) <= max_full:
+                # 類似度スコア（文字n-gramコサイン）。完全一致は必ず採用。
+                text = f"{ep.event} {ep.context} {ep.result} {' '.join(ep.tags)}"
+                sim = self._ngram_similarity(query_ngrams, text.lower(), n)
+                if keyword or sim >= min_sim:
+                    score = 1.0 + sim_weight * sim if keyword else sim_weight * sim
+                    scored.append((score, ep.importance,
+                                   ep.timestamp.timestamp(), ep))
+            else:
+                if keyword:
+                    scored.append((1.0, ep.importance,
+                                   ep.timestamp.timestamp(), ep))
 
-        # 重要度フィルタ
-        results = [
-            ep for ep in results
-            if ep.importance >= input.min_importance
-        ]
-
-        # 重要度降順でソート（同率の場合は時系列降順）
-        results.sort(key=lambda e: (e.importance, e.timestamp.timestamp()), reverse=True)
-        results = results[:input.top_k]
+        # スコア → 重要度 → 時系列 の降順でソート
+        scored.sort(key=lambda x: (x[0], x[1], x[2]), reverse=True)
+        results = [s[3] for s in scored[:input.top_k]]
 
         return MemoryOutput(
             episodes=results,
@@ -148,6 +166,24 @@ class Memory:
         for token in [" ", "　", "を", "の", "が", "に", "へ", "する", "したい", "たい"]:
             cleaned = cleaned.replace(token, "")
         return cleaned[:12]
+
+    @staticmethod
+    def _char_ngrams(text: str, n: int = 2) -> set:
+        """文字n-gram集合を返す（v5.0: ハイブリッド検索用）。"""
+        if not text:
+            return set()
+        if n <= 1 or len(text) < n:
+            return {text}
+        return {text[i:i + n] for i in range(len(text) - n + 1)}
+
+    @classmethod
+    def _ngram_similarity(cls, query_ngrams: set, text: str, n: int) -> float:
+        """文字n-gramコサイン類似度（0.0〜1.0）。"""
+        text_ngrams = cls._char_ngrams(text, n)
+        if not query_ngrams or not text_ngrams:
+            return 0.0
+        overlap = len(query_ngrams & text_ngrams)
+        return overlap / (len(query_ngrams) * len(text_ngrams)) ** 0.5
 
     def repetition_count(self, goal: str, window: int = 10) -> int:
         """

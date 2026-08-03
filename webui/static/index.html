@@ -119,6 +119,17 @@ body {
 .progress-bar { display: inline-block; height: 6px; width: 80px; background: var(--border); border-radius: 3px; vertical-align: middle; }
 .routine-item { padding: 6px 0; font-size: 13px; border-bottom: 1px solid var(--border); }
 
+/* ── Benchmarks (v5.0 Phase 3) ── */
+.bench-report { margin-bottom: 16px; }
+.bench-report .bench-head { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+.bench-badge { font-size: 11px; padding: 2px 8px; border-radius: 10px; font-weight: 600; }
+.bench-badge.pass { background: var(--green); color: #fff; }
+.bench-badge.fail { background: var(--red); color: #fff; }
+.bench-section { border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; margin-bottom: 8px; background: rgba(0,0,0,0.15); }
+.bench-section .bs-head { display: flex; align-items: center; gap: 8px; font-size: 13px; margin-bottom: 6px; }
+.bench-metrics { font-size: 12px; color: var(--muted); }
+.bench-details { font-size: 11px; color: var(--muted); line-height: 1.6; margin-top: 2px; }
+
 /* ── Control ── */
 .ctl-status { display: flex; justify-content: space-between; font-size: 13px; padding: 4px 0; }
 .ctl-status .val { color: var(--accent); }
@@ -152,6 +163,7 @@ body {
     <div class="tab" data-tab="memory">記憶 <span class="count" id="memory-count">0</span></div>
     <div class="tab" data-tab="logs">ログ</div>
     <div class="tab" data-tab="plan">計画</div>
+    <div class="tab" data-tab="benchmarks">ベンチマーク</div>
     <div class="tab" data-tab="control">コントロール</div>
   </div>
 
@@ -244,6 +256,17 @@ body {
       </div>
       <div class="card" style="margin-top:16px"><h3>アイデンティティ方針</h3><div id="plan-policy" style="font-size:13px;color:var(--muted)"></div></div>
       <div class="card" style="margin-top:16px"><h3>日記</h3><div id="plan-diary" style="font-size:13px;color:var(--muted)"></div></div>
+    </div>
+
+    <!-- Benchmarks (v5.0 Phase 3) -->
+    <div class="panel" id="panel-benchmarks">
+      <div style="margin-bottom:12px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <span style="font-size:13px;color:var(--muted)">Phase 3 検証レポート（サプライズ / アブレーション / 記憶）</span>
+        <span style="flex:1"></span>
+        <button class="chat-send" style="padding:6px 16px;font-size:12px" id="bench-run">再実行</button>
+        <button class="chat-send" style="padding:6px 16px;font-size:12px" id="bench-refresh">更新</button>
+      </div>
+      <div id="bench-list"></div>
     </div>
 
     <!-- Control -->
@@ -423,6 +446,12 @@ setInterval(async () => {
       const pct = Math.round(val * 100);
       driveHtml += '<div class="drive-bar"><div class="label"><span>' + name + '</span><span>' + pct + '%</span></div>' +
         '<div class="bar"><div class="fill" style="width:' + pct + '%;background:' + (driveColors[name] || '#58a6ff') + '"></div></div></div>';
+    }
+    // v5.0: サプライズ（実測された予測誤差。tier2/3 サイクルでのみ値あり）
+    if (data.surprise !== null && data.surprise !== undefined) {
+      const sp = Number(data.surprise);
+      driveHtml += '<div class="stat-row"><span>サプライズ（予測誤差）</span>' +
+        '<span class="val" style="color:' + (sp > 0.5 ? 'var(--purple)' : 'var(--green)') + '">' + sp.toFixed(3) + '</span></div>';
     }
     document.querySelector('#card-drives').innerHTML = '<h3>駆動値 <span style="font-size:12px;color:var(--muted);text-transform:none;letter-spacing:0">→ ' + (data.primary_drive || '') + '</span></h3>' + driveHtml;
 
@@ -684,6 +713,10 @@ function renderCycle(data) {
     dh += '<div class="stat-row"><span>主駆動</span><span class="val">' + (c.drive.primary || '') + '</span></div>';
     dh += '<div class="stat-row"><span>緊張</span><span class="val">' + (c.drive.tension || 0) + '</span></div>';
     dh += '<div class="stat-row"><span>新奇性</span><span class="val">' + (c.drive.novelty || 0) + '</span></div>';
+    // v5.0: サプライズ（実測予測誤差）
+    if (c.drive.surprise !== null && c.drive.surprise !== undefined) {
+      dh += '<div class="stat-row"><span>サプライズ</span><span class="val">' + Number(c.drive.surprise).toFixed(3) + '</span></div>';
+    }
   }
   document.getElementById('cycle-drives').innerHTML = '<h3>駆動値</h3>' + dh;
   
@@ -827,6 +860,62 @@ async function loadCycle() {
 document.getElementById('cycle-refresh').addEventListener('click', loadCycle);
 setInterval(loadCycle, 5000);
 setTimeout(loadCycle, 600);
+
+// ── v5.0: Phase 3 ベンチマーク表示・再実行 ──
+async function loadBenchmarks() {
+  try {
+    const r = await fetch('/api/benchmarks');
+    const data = await r.json();
+    const list = document.getElementById('bench-list');
+    const reports = data.reports || [];
+    if (!reports.length) {
+      list.innerHTML = '<div style="text-align:center;padding:40px;color:var(--muted)">レポートがありません。<br>「再実行」ボタンでベンチマークを生成できます。</div>';
+      return;
+    }
+    let html = '';
+    for (const rep of reports) {
+      const badge = rep.all_passed
+        ? '<span class="bench-badge pass">PASS</span>'
+        : '<span class="bench-badge fail">FAIL</span>';
+      html += '<div class="bench-report">' +
+        '<div class="bench-head"><b>' + escapeHtml(rep.name) + '</b>' + badge +
+        '<span style="font-size:11px;color:var(--muted)">' + escapeHtml(rep.generated_at || '') + '</span></div>';
+      for (const s of rep.sections || []) {
+        const mark = s.passed ? '<span style="color:var(--green)">✓</span>' : '<span style="color:var(--red)">✗</span>';
+        html += '<div class="bench-section"><div class="bs-head">' + mark + ' ' + escapeHtml(s.name) + '</div>';
+        for (const [k, v] of Object.entries(s.metrics || {})) {
+          html += '<div class="bench-metrics">' + escapeHtml(String(k)) + ': <b style="color:var(--text)">' + escapeHtml(String(v)) + '</b></div>';
+        }
+        for (const d of s.details || []) {
+          html += '<div class="bench-details">• ' + escapeHtml(d) + '</div>';
+        }
+        html += '</div>';
+      }
+      html += '</div>';
+    }
+    list.innerHTML = html;
+  } catch (e) { /* ignore */ }
+}
+
+async function runBenchmarks() {
+  const btn = document.getElementById('bench-run');
+  btn.disabled = true;
+  btn.textContent = '実行中...';
+  try {
+    const r = await fetch('/api/benchmarks/run', {method: 'POST'});
+    const d = await r.json();
+    if (d.ok) { btn.textContent = '再実行'; loadBenchmarks(); }
+    else { btn.textContent = '失敗'; alert(d.message || '実行失敗'); }
+  } catch (e) {
+    btn.textContent = '再実行';
+  }
+  setTimeout(() => { btn.disabled = false; btn.textContent = '再実行'; }, 3000);
+}
+
+document.getElementById('bench-run').addEventListener('click', runBenchmarks);
+document.getElementById('bench-refresh').addEventListener('click', loadBenchmarks);
+setInterval(loadBenchmarks, 15000);
+setTimeout(loadBenchmarks, 800);
 
 // ── Control panel (daemon / UI start-stop-restart) ──
 const CONTROL_ACTIONS = {

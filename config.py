@@ -36,6 +36,16 @@ MEMORY_CONFIG = {
     "search_top_k": 5,
     "auto_summarize_threshold": 100,
     "forget_threshold": 0.15,
+    # v5.0: Phase 3 — ハイブリッド検索（キーワード + 文字n-gram類似度）
+    # 記憶保持ベンチマークで実測された弱点（言い換え・表記揺れで Recall@k=0.0）を
+    # 改善する。日本語は形態素解析なしで動く文字n-gramコサイン類似度を使用。
+    "hybrid": {
+        "enabled": True,
+        "n_gram_size": 2,          # 文字バイグラム
+        "similarity_weight": 1.0,  # 類似度スコアの重み（キーワードヒット=1.0に加算）
+        "min_similarity": 0.25,    # 類似度のみヒットの最低閾値（cosine）
+        "max_episodes_full_scan": 5000,  # 全走査する上限（超えたらキーワードのみ）
+    },
 }
 
 # 人格（v3.4: 自己モデル — 自身の記憶等を参照して自己認識を保持・永続化）
@@ -140,4 +150,24 @@ LEARNING_CONFIG = {
     "history_min_same_type": 3,  # 同一 eval_type の履歴が3件未満ならスキップ
     # 記憶検索キャッシュ
     "memory_cache_seconds": 60,
+}
+
+# v5.0: Phase 3 — サプライズ層（本物のFEPコンポーネント）
+# 予測誤差（サプライズ）を実測し、駆動の新奇性・学習率・行動選択に反映する。
+# 外部レビュー対応: FEPのうち数学的に実装するのはこの層のみ（他は inspired-by）。
+SURPRISE_CONFIG = {
+    "sigma_floor": 0.05,          # 分散 σ の下限（0除算防止）
+    "default_sigma": 0.3,         # 予測が不確実性を持たない場合のデフォルト σ
+    # 新奇性スコアへのサプライズ反映率（0.0=不使用）。
+    # 注意: surprise=0.0（予測が正確）時もブレンド式 (1-blend)*heuristic + blend*s
+    # が適用され、新奇性が (1-blend) 倍に減衰する（正確 = エピステミック価値低）。
+    # このため tier2/3 判定（novelty_tier2=0.25 等）の頻度が低下し得る。
+    "novelty_blend": 0.4,
+    "learning_modulation": 1.5,   # 学習率の増幅係数（surprise=1.0 で +150%）
+    "learning_modulation_cap": 2.0,  # 変調後の学習率上限（base の何倍まで）
+}
+
+# v5.0: Phase 3 — ベンチマーク（検証と本物化、M15-M17）
+BENCHMARK_CONFIG = {
+    "report_dir": "data/benchmarks",
 }

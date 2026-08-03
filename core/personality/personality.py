@@ -397,6 +397,19 @@ class Personality:
                 )
             lines.append("")
 
+        # v5.0: Phase 3 — 直近のサプライズ（予測がどれだけ外れたか）を提示。
+        # 行動選択のバイアス: 高サプライズ時は同じ行動の繰り返しより探索・学習を優先。
+        if input.surprise is not None:
+            lines.append("### Recent Prediction Surprise")
+            lines.append(
+                f"Surprise: {input.surprise:.2f} "
+                "(how much the world differed from your last prediction)"
+            )
+            lines.append(
+                "If surprise is high, prefer exploring/learning over repeating the same action."
+            )
+            lines.append("")
+
         lines.append("### Memory Summary")
         lines.append(input.memory.summary)
         lines.append("")

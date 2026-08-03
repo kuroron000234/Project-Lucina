@@ -1,7 +1,14 @@
 # lucina-NA
 
-10-layer autonomous AI agent using Free Energy Principle / active inference.
+10-layer autonomous AI agent inspired by the Free Energy Principle (FEP) / active inference.
 Runs fully locally with Ollama + Gemma 4 on RTX 4060 (8GB VRAM).
+
+Note on FEP terminology: the architecture is **inspired by** FEP / active inference
+(see docs/SPECIFICATION.md 1.2). The only mathematically genuine FEP component is the
+surprise layer (v5.0): measured prediction error S = (x-mu)^2/sigma^2 + ln(sigma)
+computed from world-model predictions vs. actual evaluation outcomes, fed back into
+drive novelty, learning rate, and action selection. The remaining layers use FEP as a
+design metaphor, not as variational inference.
 
 ## Architecture
 
