@@ -1,0 +1,18 @@
+# config/candidate_gemma4.yaml — タスク0 候補: Gemma-4-12B-it（Gemma系・2026年最新・Apache 2.0）
+model:
+  path: "./models/gemma-4-12b-it-q4_k_m.gguf"
+  context_window: 8192
+  n_gpu_layers: 32           # 7.1GB: KVキャッシュ分を残すため部分オフロード（8GB VRAM対応・ngl=40は不安定）
+
+memory:
+  summarizer_model_path: "./models/qwen3.5-9b-q4_k_m.gguf"  # 要約は小型側のモデルを共有
+  persist_directory: "./data/chroma"
+
+drive:
+  vocab_expansion:
+    max_candidates: 3000
+
+inference:
+  sampling: "multinomial"
+  temperature: 0.8
+  seed: 42

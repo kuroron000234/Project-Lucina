@@ -1,0 +1,23 @@
+# config/candidate_llmjp4.yaml — タスク0 候補: llm-jp-4-8B-thinking（国産・日本語特化・2026年最新）
+model:
+  path: "./models/llm-jp-4-8b-thinking-q4_k_m.gguf"
+  context_window: 8192
+  n_gpu_layers: -1           # 5.3GB: RTX 4060 8GB に収まる（全オフロード）
+
+memory:
+  summarizer_model_path: "./models/llm-jp-4-8b-thinking-q4_k_m.gguf"
+  persist_directory: "./data/chroma"
+
+drive:
+  vocab_expansion:
+    max_candidates: 3000
+
+inference:
+  sampling: "multinomial"
+  temperature: 0.8
+  seed: 42
+  # llm-jp-4 のチャットテンプレートは既定で reasoning_effort=medium を注入し、
+  # 応答前に長い思考ブロック（analysisチャネル）を生成する。校正・モデル選定の
+  # 収束判定が思考トークンで埋まるため off にする（応答チャネルを直接生成させる）。
+  chat_template_kwargs:
+    reasoning_effort: "off"

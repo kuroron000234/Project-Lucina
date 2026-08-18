@@ -1,0 +1,40 @@
+# pyproject.toml — Project Lucina-Next（仕様書 v1.4 §3 準拠）
+# バージョンは実装開始時の最新安定版へ固定すること。
+# 注: 重いネイティブ依存（llama-cpp-python / sentence-transformers / chromadb）は
+#     オプショナル依存に分離している（`pip install -e ".[full]"` で一括導入）。
+#     仕様書 §3 の dependencies と等価な一式は optional-dependencies.full に集約。
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "lucina-next"
+version = "0.1.0"
+description = "常時稼働型の自律思考ループ: 内部Drive状態がロジット分布に連続的に影響するAIエージェント"
+requires-python = ">=3.11"
+dependencies = [
+    "numpy>=1.26",
+    "pyyaml>=6.0",
+]
+
+[project.optional-dependencies]
+llm = ["llama-cpp-python>=0.3.0"]        # GPU/CPUビルドはハードウェアに合わせて環境変数指定（仕様書 §3）
+embed = ["sentence-transformers>=3.0"]   # 日本語対応の埋め込みモデル
+vector = ["chromadb>=0.5"]               # 長期記憶ベクトルストア（永続化）
+test = ["pytest>=8.0", "pytest-asyncio>=0.24"]
+full = [
+    "llama-cpp-python>=0.3.0",
+    "sentence-transformers>=3.0",
+    "chromadb>=0.5",
+    "pytest>=8.0",
+    "pytest-asyncio>=0.24",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+addopts = "-q"

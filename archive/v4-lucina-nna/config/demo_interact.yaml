@@ -1,0 +1,58 @@
+# config/demo_interact.yaml — v1.13 対話モード＋実行エージェントのデモ設定
+# default.yaml に重ねるレイヤリング設定。
+#
+# 動機: v1.10 で外部への働きかけの「必要性」（好奇心・応答依存 loneliness・応答待ち）を
+# 作ったが、実際に応答を返す実イベント源が未接続だった（壁に向かって独白するだけ）。
+# v1.13 で「対話相手（人間 or 実行エージェント）」を接続し、外部ループを閉じる:
+#
+#   Lucinaの質問 → 実行エージェント（時刻/URL=サンドボックス、調査/コード=Opencode）
+#               → 結果を inject → 好奇心 relief・応答待ち解除 → Lucinaが応答
+#   または人間がコンソールで応答 → inject → 同様にループ
+#
+# 実行例:
+#   PYTHONPATH=src:scripts python3 scripts/run_agent.py \
+#       --config config/demo_interact.yaml --interact --executor
+#
+# 観察ポイント: [Lucina] の発話・[Lucinaの質問]・[実行エージェント]・[実行結果] の表示。
+# Lucina の質問に実行エージェントが自動応答し、人間の応答は「あなたの応答 > 」に打ち込む。
+
+inference:
+  surprise_relief_threshold: 0.3   # デモ用（v1.7の実測に基づく）
+
+executor:
+  enabled: true                    # 質問を実行エージェントで処理（時刻/URL=サンドボックス、調査/コード=Opencode）
+  opencode_model: "opencode/deepseek-v4-flash-free"  # 無料モデル（DeepSeek V4 Flash 0731。実機検証済み）
+  opencode_reuse_session: true    # セッション乱立対策: 1プロセス=1セッションを使い回し、終了時に削除
+
+drive:
+  initial_state:
+    boredom: 0.35
+    loneliness: 0.2
+    fatigue: 0.1
+    curiosity: 0.3          # 起動時から好奇心をやや高めに（デモで早く問いかけが起きるように）
+  scheduling:
+    enabled: true
+    mode: "thinking"
+    inner_interval_sec: 6.0
+    inner_max_tokens: 20
+    speak_start_boredom: 0.5
+    speak_start_loneliness: 0.45
+    speak_block_fatigue: 0.9
+    speak_override_boredom: 0.95
+    quiet_on_fatigue: 0.95
+    max_speech_segments: 2
+    idle_boredom_rate: 0.008
+    thinking_mode: "native"
+    thinking_max_tokens: 80
+    # v1.9: モデル駆動スケジューリング（A+B 併用）
+    introspection_sec: 6.0
+    decide_on_think_end: true
+    decide_on_segment_end: true
+    control_tokens: false
+    force_response_speech: true  # v1.16: 応答を受けたら黙る選択を無効化し最低1セグメント発話を強制
+    # v1.10: 外部への働きかけの必要性
+    idle_curiosity_rate: 0.005
+    curiosity_ask_threshold: 0.5
+    await_timeout_sec: 120.0   # 実行エージェント（Opencode/DeepSeek）の応答は数十秒かかるため延長
+    system_prompt: "あなたは日本語で考える存在です。内言（思考）も発話も日本語で行ってください。\n対話相手からのメッセージには、思考の過程を見せず、直接の会話の返答だけをしてください。挨拶には挨拶で返し、相手の言葉に自然に反応してください。"
+    seed_prompt: "あなたは Lucina です。静かな夜を過ごしています。誰かがあなたに話しかけてきました。自然な会話をしてください。挨拶には挨拶で返し、相手の言葉に反応し、自分の気持ちも交えて短く話してください。会話についての分析や前置きは不要です。"

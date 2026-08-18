@@ -1,0 +1,18 @@
+# config/candidate_qwen3.yaml — タスク0 候補: Qwen3.5-9B（Qwen系・2026年最新）
+model:
+  path: "./models/qwen3.5-9b-q4_k_m.gguf"
+  context_window: 8192
+  n_gpu_layers: -1           # 5.7GB: RTX 4060 8GB に収まる（全オフロード）
+
+memory:
+  summarizer_model_path: "./models/qwen3.5-9b-q4_k_m.gguf"
+  persist_directory: "./data/chroma"
+
+drive:
+  vocab_expansion:
+    max_candidates: 3000
+
+inference:
+  sampling: "multinomial"
+  temperature: 0.8
+  seed: 42

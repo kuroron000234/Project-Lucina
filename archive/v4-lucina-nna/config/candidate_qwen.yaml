@@ -1,0 +1,18 @@
+# config/candidate_qwen.yaml — タスク0 候補: Qwen2.5-1.5B-Instruct（Qwen系・ベースライン）
+model:
+  path: "./models/qwen2.5-1.5b-instruct-q4_k_m.gguf"
+  context_window: 8192
+  n_gpu_layers: -1           # 全レイヤーGPUオフロード（RTX 4060 8GB）
+
+memory:
+  summarizer_model_path: "./models/qwen2.5-1.5b-instruct-q4_k_m.gguf"  # 同モデルで要約
+  persist_directory: "./data/chroma"
+
+drive:
+  vocab_expansion:
+    max_candidates: 3000
+
+inference:
+  sampling: "multinomial"
+  temperature: 0.8
+  seed: 42

@@ -1,0 +1,54 @@
+# config/demo_external.yaml — v1.10 外部への働きかけの必要性のデモ用設定
+# default.yaml に重ねるレイヤリング設定。
+#
+# 動機: v1.9 までの Lucina は「内部の欲求（Drive）を内部の出力で解消できる」ため、
+# 外部に働きかける必要性が構造的に発生しなかった（実測でもモデルは黙る・考えるを好み、
+# 発話は Drive の安全弁に委ねられた）。v1.10 では「内部では解消できない欲求」を導入する:
+#
+#   ①好奇心（curiosity）: 時間で自然上昇。relief は外部入力（応答）でのみ発火。
+#     閾値を超えるとモデルが外部に質問を発する（働きかけ）。
+#   ②応答依存 loneliness: 話すだけでは部分 relief（speak_relief）のみ。
+#     応答が返って初めてフル解消 → 無視されると寂しさが蓄積し、届く言葉が必然化。
+#   ③応答待ち（awaiting）: 質問後は生成を止めて応答を待つ。応答が無い限り先に進めない。
+#
+# 実行例:
+#   PYTHONPATH=src:scripts python3 scripts/run_agent.py \
+#       --config config/demo_external.yaml --scheduled --seconds 120
+#
+# 観察ポイント: reports/autonomy.jsonl の ask_start / await_start / response_received /
+# await_timeout イベント。質問を発して応答待ちに入り、interrupts に応答を inject すると
+# 好奇心・寂しさが解消される。
+
+inference:
+  surprise_relief_threshold: 0.3   # デモ用（v1.7の実測に基づく）
+
+drive:
+  initial_state:
+    boredom: 0.35
+    loneliness: 0.2
+    fatigue: 0.1
+    curiosity: 0.3          # ① 起動時から好奇心をやや高めに（デモで早く問いかけが起きるように）
+  scheduling:
+    enabled: true
+    mode: "thinking"
+    inner_interval_sec: 6.0
+    inner_max_tokens: 20
+    speak_start_boredom: 0.5
+    speak_start_loneliness: 0.45
+    speak_block_fatigue: 0.9
+    speak_override_boredom: 0.95
+    quiet_on_fatigue: 0.95
+    max_speech_segments: 2
+    idle_boredom_rate: 0.008
+    thinking_mode: "native"
+    thinking_max_tokens: 80
+    # v1.9: モデル駆動スケジューリング（A+B 併用・実測で採用）
+    introspection_sec: 6.0
+    decide_on_think_end: true
+    decide_on_segment_end: true
+    control_tokens: false
+    # v1.10: 外部への働きかけの必要性
+    idle_curiosity_rate: 0.005    # ① 待機中に好奇心が溜まる（デモ用に加速）
+    curiosity_ask_threshold: 0.5  # ① 好奇心がこれを超えると外部に問いかける
+    await_timeout_sec: 45.0       # ③ 応答待ちの上限（超えたら待機解除）
+    system_prompt: "あなたは日本語で考える存在です。内言（思考）も発話も日本語で行ってください。"

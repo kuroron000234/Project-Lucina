@@ -1,0 +1,47 @@
+# config/demo_autonomous.yaml — §0 自律思考ループ（v1.7）のデモ用設定
+# default.yaml に重ねるレイヤリング設定。実モデルで「誰も話しかけていないのに
+# 自発的に話し始める」様子を数分で観察できるよう、初期Driveとスケジューリング
+# 閾値をデモ向けに調整している。
+#
+# 実行例:
+#   PYTHONPATH=src:scripts python3 scripts/run_agent.py \
+#       --config config/demo_autonomous.yaml --scheduled --seconds 120
+#
+# 観察ポイント: reports/autonomy.jsonl の speech_start / inner_thought イベントと、
+# コンソールの「autonomy: speech_start」ログ。
+
+# 実測の発見（v1.7・§11）: 実発話の平均サプライズは 0.29〜0.51（校正スイープ実測）であり、
+# 既定の surprise_relief_threshold=0.7 では boredom relief が実質発火しない。デモでは下げて
+# 「話す→退屈が解消→静か→退屈が溜まる→話す」のホメオスタシスを成立させる。
+inference:
+  surprise_relief_threshold: 0.3   # デモ用: 実発話のサプライズが届く値。本番値は今後校正（§11）
+
+drive:
+  initial_state:
+    boredom: 0.35
+    loneliness: 0.2
+    fatigue: 0.1
+  scheduling:
+    enabled: true
+    mode: "thinking"
+    inner_interval_sec: 6.0      # 6秒ごとに内言（思考）を生成
+    inner_max_tokens: 20
+    speak_start_boredom: 0.5
+    speak_start_loneliness: 0.45
+    speak_block_fatigue: 0.9
+    speak_override_boredom: 0.95
+    quiet_on_fatigue: 0.95
+    max_speech_segments: 2       # 1回の発話サイクルで最大2セグメント話して沈黙
+    idle_boredom_rate: 0.008     # 待機中は退屈が速めに溜まる（デモ用に加速）
+    thinking_mode: "native"      # v1.8: モデル自身のネイティブ思考（<think>ブロック）を内言として捕捉する
+    thinking_max_tokens: 80      # 思考セッション1回の上限トークン
+    # --- v1.9: モデル駆動スケジューリング（実測で採用した A+B 併用） ---
+    # 実測（§5.6.2・⑮）: C（制御トークン）は出力0回で採用不可。A+B がモデルの意思を
+    # 遷移に反映できる。安全弁（Drive閾値・セグメント上限）はモデルの判断より優先される。
+    introspection_sec: 6.0       # B: 待機中にモデルへ「待機/内言/発話」を決断させる間隔（秒）
+    decide_on_think_end: true    # A: 思考ブロック終了時に「話す/黙る/さらに考える」をモデルに決断させる
+    decide_on_segment_end: true  # A: 発話セグメント境界で「続ける/黙る」をモデルに決断させる
+    control_tokens: false        # C: 実測で出力0回のため非採用（§5.6.2）
+    system_prompt: "あなたは日本語で考える存在です。内言（思考）も発話も日本語で行ってください。"
+    # 注（v1.8実測）: Qwen3.5 のネイティブ推論は英語優位のため、思考言語の完全な日本語化は不可。
+    #   発話（</think>以降）はユーザー言語（日本語）で生成される。この設定は役割認識の補助として機能する。

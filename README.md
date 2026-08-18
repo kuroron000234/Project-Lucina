@@ -133,6 +133,16 @@ Qwen2.5:32b（本脳）+ Qwen2.5:14b（副脳）による二重処理と、21パ
 - **Mona**: 「ハート駆動」の別アプローチ（好奇心・愛情・落ち着きなさの3パラメータ）
 - **状態**: 研究段階で実用化には至らず。lucina-NAへと知見を継承
 
+### v4: Lucina-Next (`archive/v4-lucina-nna/`)
+
+**Lucina-Next** — 内部Drive状態をロジットバイアスとして**連続注入**する、常時稼働型の自律思考ループ実験（仕様書 v1.4）。  
+外部イベント駆動（キック）に頼らず、待機中でもDrive力学系がロジット分布に常に影響し続けることで、エージェントが自発的に行動を選ぶことを目指した。
+
+- **LLM**: llama-cpp-python + GGUF（モデル選定で **Qwen3.5-9B** を採用）
+- **採用根拠**: Driveバイアス収束率100%・サプライズ分離 +0.079（候補中最良）・RTX 4060 8GBで安定稼働。Gemma-4-12Bは収束最速だがVRAM限界で除外、llm-jp-4-8Bは収束せず除外
+- **特徴**: Drive結合行列による力学系（boredom/loneliness/curiosity/fatigue）、ロジットバイアス適用（BPE先頭トークン方式）、サプライズ（予測エントロピー近似）、語彙半自動拡張、階層記憶（ChromaDB）、外部刺激の割り込み注入口
+- **状態**: モデル選定・閾値校正・比較実験まで完了した研究フェーズ。常時稼働の運用設計を残して中断、lucina-NA へ知見を継承
+
 ---
 
 ## リポジトリ構成
@@ -170,7 +180,8 @@ Project-Lucina/
 └── archive/
     ├── v1-lucina/              # Monica Core（初代）
     ├── v2-monica/              # Monica Dual-LLM
-    └── v3-monica-v8/           # Monica v8 Hybrid / Lucina-Beta
+    ├── v3-monica-v8/           # Monica v8 Hybrid / Lucina-Beta
+    └── v4-lucina-nna/          # Lucina-Next（Drive→ロジット連続注入・常時稼働型）
 ```
 
 ---

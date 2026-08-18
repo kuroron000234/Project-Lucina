@@ -1,0 +1,149 @@
+# config/default.yaml — 仕様書 v1.4 §4 準拠
+# すべてのマジックナンバーはコードに埋め込まず、ここに集約する。
+
+model:
+  path: "./models/qwen3.5-9b-q4_k_m.gguf"  # §1のモデル選定で確定: Qwen3.5-9B（軸1収束100%・軸2分離+0.079最良・本GPU安定）
+  context_window: 8192          # モデルの実コンテキスト上限
+  n_gpu_layers: -1               # -1で全レイヤーGPUオフロード（5.68GB: RTX 4060 8GB に収まる）
+  load_expected_sec: 240         # v1.16: ロード進捗表示の目安時間（秒）。llama-cpp に進捗コールバックが無いため、
+                                #   経過時間ベースでバーを 0→0.33 まで徐々に進める（実際の進捗ではない表示用）
+
+memory:
+  max_working_tokens_ratio: 0.75  # context_windowに対する比率で圧縮トリガーを決める
+  summarizer_model_path: "./models/qwen3.5-9b-q4_k_m.gguf"  # 要約: 本採用モデルと同一（遅延ロードのため未配置でも起動可能）
+  persist_directory: "./data/chroma"  # A1: ChromaDB永続化パス（§5.3の「永続化パス設定必須」要件。data/はgitignore対象）
+  recall:                   # v1.12: 記憶の想起（retrieve）→ 内言・発話前の文脈注入
+    enabled: true           # 起動時・内言/発話の前に過去記憶を想起して文脈に注入する
+    top_k: 3                # 1回の想起で引き出す記憶の件数
+    max_tokens: 120         # 注入する想起記憶のトークン上限（バッファ肥大・圧縮連鎖の防止）
+
+drive:
+  update_interval_sec: 0.1  # トークン生成中もバックグラウンドで連続更新（10Hz）。バイアス適用は常に最新状態
+  initial_state:            # 起動時のDrive初期値（暫定案・校正対象）
+    boredom: 0.1
+    loneliness: 0.1
+    fatigue: 0.0
+    curiosity: 0.05         # v1.10: 好奇心（新しい情報への飢え）。内部生成では解消できない（外部入力のみ）。
+                            #   0だと自己増殖（x += dt·A·x）が始まらないため微小な初期値を置く
+  relief:                   # B2: relief（解消）ルール。係数は暫定案であり校正対象
+    unit: "segment"         # ①発火単位: 発話セグメント（応答の切れ目）。トークン単位は禁止・1セグメントにつき最大1回
+    segment:
+      max_tokens: 256            # 文末記号がなくてもこのトークン数で強制区切り
+      boundary_tokens: ["。", "！", "？"]  # セグメント境界となる文末記号（実装時にtokenizeして照合）
+    boredom:
+      enabled: true
+      per_action: 0.4       # セグメント平均サプライズ >= surprise_relief_threshold で発火（最大1回）
+      decay_rate: 0.0005    # 毎ステップの緩やかな減衰（0なら減衰なし）
+    loneliness:
+      enabled: true
+      per_action: 0.6       # 応答（外部入力）で発火。フル relief（v1.10: ②応答依存の解消）
+      speak_relief: 0.2     # v1.10: 話すだけでは部分 relief のみ。応答が返らない限り完全には解消しない
+      decay_rate: 0.0002
+    curiosity:
+      enabled: true
+      per_action: 0.6       # v1.10: 外部情報（応答・割り込み）でのみ発火。内部生成では絶対に解消しない（①）
+      decay_rate: 0.0
+    fatigue:
+      enabled: true
+      per_action: 0.5       # セグメント平均サプライズ < surprise_relief_threshold で発火（休息的・低エントロピー出力）
+      decay_rate: 0.0003
+  dynamics_matrix:              # v3 §3.3のA行列。根拠のない成分は0のまま
+    boredom:
+      boredom: 0.005
+      loneliness: 0.0
+      fatigue: 0.01
+      curiosity: 0.0
+    loneliness:
+      boredom: 0.0
+      loneliness: 0.002
+      fatigue: 0.0
+      curiosity: 0.0
+    fatigue:
+      boredom: 0.0
+      loneliness: 0.0
+      fatigue: 0.003
+      curiosity: 0.0
+    curiosity:
+      boredom: 0.002
+      loneliness: 0.0
+      fatigue: 0.0
+      curiosity: 0.003     # 新奇性がないと時間で自然に溜まる（外部情報でしか解消されない）。退屈も好奇心を加速
+  vocab_expansion:
+    top_k: 30
+    sim_threshold: 0.45
+    seed_vocab_path: "./config/seed_vocab.yaml"  # B4: Drive毎のシード語彙リスト（§5.2参照）
+  scheduling:                   # v1.7: 発話スケジューリング（§0 自律思考ループ・M2）
+    enabled: false              # true で「思考(沈黙)→Drive閾値で自発的に発話→沈黙」の自律サイクル。false は従来の連続生成
+    mode: "thinking"            # 起動時モード: thinking（沈黙から開始）/ speaking
+    inner_interval_sec: 8.0     # 思考モードで内言を生成する間隔（秒）。0 なら毎判定
+    inner_max_tokens: 30        # 内言の長さ上限（トークン）
+    inner_prefix: "[内言] "     # 内言を区別する接頭辞（発話表示からは除外される）
+    speak_start_boredom: 0.6    # boredom がこれを超えると自発的に発話を開始
+    speak_start_loneliness: 0.5 # loneliness がこれを超えると自発的に発話を開始
+    speak_block_fatigue: 0.8    # fatigue がこれを超えていると発話開始を抑止（沈黙継続）
+    speak_override_boredom: 0.95  # 我慢の限界: ここまで退屈なら fatigue を無視して発話（永久沈黙の防止）
+    quiet_on_fatigue: 0.85      # 発話中に fatigue がこれを超えたらセグメント境界で沈黙へ
+    max_speech_segments: 4      # 1回の発話サイクルで話す最大セグメント数
+    idle_boredom_rate: 0.0      # 思考(沈黙)モード中の追加の退屈蓄積（/秒）。0なら通常の力学系のみ。デモ用 config で加速可能
+    thinking_mode: "manual"     # v1.8: "manual"=従来の[内言]方式 / "native"=Qwen3.5系のネイティブ<think>ブロックを捕捉
+                                #   native時、内言はモデル自身のネイティブ思考（<think>〜</think>）、発話は</think>以降の回答になる
+    thinking_max_tokens: 120    # 思考セッション1回の上限トークン（native）。超えても思考が閉じない場合は</think>で強制クローズ
+    system_prompt: ""           # v1.8: 起動時のシステムプロンプト（native思考の言語指定などに使用。空ならなし）
+    # --- v1.9: モデル駆動スケジューリング（モデル自身が「いつ話す・黙る・考える」を選ぶ） ---
+    # 決断は制約付きデコード（engine.generate_decision）で、選択肢から必ず1つに収束する。
+    # Drive閾値（上記 speak_start_* / quiet_on_fatigue / max_speech_segments）は安全弁として残り、
+    # モデルが「待機」を選び続けても退屈の限界（speak_override_boredom）で強制発話する（デッドロック防止）。
+    introspection_sec: 0.0      # B: 待機中にモデルへ「待機/内言/発話」を決断させる間隔（秒）。0なら従来のタイマー内言
+    decide_on_think_end: false   # A: 思考ブロック終了時に「話す/黙る/さらに考える」をモデルに決断させる
+    decide_on_segment_end: false # A: 発話セグメント境界で「続ける/黙る」をモデルに決断させる
+    force_response_speech: true  # v1.16: 外部からの応答（人間のメッセージ）を受けたら黙る選択を無効化し、
+                                 #   最低1セグメントの応答を強制する（対話が成立しない問題への対応）
+    control_tokens: false        # C: 生成中にモデルが制御トークン（<|lucina_speak|>等）を出力して自ら遷移する
+    control_token_instruction: "あなたは自分の状態に応じて、以下の制御トークンを出力できます。\
+話したくなったら <|lucina_speak|>、黙りたくなったら <|lucina_wait|>、考えたくなったら <|lucina_think|> を出力してください。"
+    decision_max_rethink: 2      # A: 「さらに考える」の連続上限（無限ループ防止）
+    # --- v1.10: 外部への働きかけの必要性（内部では解消できない欲求） ---
+    idle_curiosity_rate: 0.0      # ① 待機中に好奇心が溜まる速度（/秒）。0なら力学系の自然上昇のみ
+    curiosity_ask_threshold: 0.6  # ① 好奇心がこれを超えると外部に問いかけ（質問）を発する
+    await_timeout_sec: 60.0       # ③ 応答待ちの上限（超えたら待機解除。スタック防止）
+    question_instruction: "【あなたは今、相手に質問したい気持ちです。好奇心を満たすために、短い質問を一つ発してください。】"
+
+executor:                     # v1.13: 実行エージェント（Lucinaの質問・依頼を外部実行して結果を注入）
+  enabled: false              # true で質問を自前サンドボックス（時刻・URL）または Opencode に振り分けて実行
+  opencode_command: "opencode"  # 複雑な依頼（調査・コード等）を投げる CLI。未インストールなら人間に委ねる
+  opencode_model: "opencode/deepseek-v4-flash-free"  # 無料モデル（v1.13実機検証済み）。空なら opencode の既定に任せる
+  opencode_reuse_session: true  # セッション乱立対策: 同一プロセス内で1セッションを使い回し、終了時に削除
+  opencode_timeout_sec: 120   # Opencode 実行のタイムアウト（秒）
+  sandbox_timeout_sec: 15     # サンドボックス（date / URL取得）のタイムアウト（秒）
+  url_max_chars: 600          # URL取得で返す最大文字数
+
+web:                          # v1.14: Web UI（--web）の既定値
+  host: "127.0.0.1"           # バインドホスト（リモート公開する場合は 0.0.0.0 と認証を検討）
+  port: 8787                  # ポート（--port で上書き可）
+  auto_open: true             # v1.16: 起動時にブラウザを自動で開く（--no-browser で無効化）
+
+inference:
+  logit_bias_coefficient: 3.5    # 校正済み 2026-08-12: Qwen3.5-9B スイープ選定（ΔP飽和80%に達する最小係数・最小十分原理）。モデル固有の値であり、§1でモデルを変えたら要再校正（scripts/calibrate_logit_bias.py）
+  entropy_think_threshold: 0.7   # このエントロピー以上でTHINKトークン確率上昇（思考量調整専用）
+  surprise_relief_threshold: 0.7 # ②relief発火専用のサプライズ高/低判定閾値。entropy_think_thresholdとは独立に校正する
+                                 #   （目的の異なる判定への同一閾値の使い回しは結合を生むため禁止。§9参照）
+  entropy_scaling: 5.0           # A2: サプライズ正規化係数。surprise = min(1.0, entropy / entropy_scaling)
+  sampling: "multinomial"        # トークンサンプリング方式: multinomial | greedy（暫定案）
+  temperature: 0.8               # サンプリング温度（greedy時は無視）
+  seed: 42                       # 再現性用シード
+  think_token_ids: []            # B6: THINK相当トークンIDのリスト。多くのモデルはネイティブTHINKトークンを持たない。
+                                 #     空リストなら本機能は無効（思考語彙のバイアス強化へ置換する場合は§5.2の語彙を利用）
+
+embedding:
+  model: "intfloat/multilingual-e5-small"  # 語彙拡張・埋め込み検索の共通モデル（§2手順3。日本語対応を選定）
+  device: "cpu"  # 語彙拡張は起動時1回の軽量処理。GPUはLlamaモデルと競合するためCPU推奨（モデル選定時の多重ロード対策）
+
+logging:
+  log_dir: "./reports"           # §7の構造化ログ（JSON Lines）・校正レポート出力先
+  level: "INFO"
+
+thresholds:
+  # v3で「暫定値・校正必須」と明記した値。calibrate_thresholds.py の出力で上書きすること
+  attractor_survival_tokens: 91       # 校正済み 2026-08-09: Qwen3.5-9B で p90=90.9（50試行）
+  attractor_survival_prob: 0.9        # 校正済み 2026-08-09: p90に対応する分位数。1000トークン上限内の実測収束率は1.0（50/50）
+  interrupt_latency_multiplier: 1.5  # 平均トークン生成レイテンシに対する倍率

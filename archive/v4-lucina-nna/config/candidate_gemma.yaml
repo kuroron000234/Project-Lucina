@@ -1,0 +1,18 @@
+# config/candidate_gemma.yaml — タスク0 候補: Gemma-2-2B-it（Gemma系）
+model:
+  path: "./models/gemma-2-2b-it-q4_k_m.gguf"
+  context_window: 8192
+  n_gpu_layers: -1           # 2B級は全レイヤーGPUオフロード可（RTX 4060 8GB）
+
+memory:
+  summarizer_model_path: "./models/qwen2.5-1.5b-instruct-q4_k_m.gguf"  # 要約は共通の軽量モデル
+  persist_directory: "./data/chroma"
+
+drive:
+  vocab_expansion:
+    max_candidates: 3000
+
+inference:
+  sampling: "multinomial"
+  temperature: 0.8
+  seed: 42
