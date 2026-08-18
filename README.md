@@ -5,10 +5,20 @@
 
 ---
 
-## 現行プロジェクト: lucina-NA （2026〜）
+## 現行プロジェクト
 
-lucina-NA（Lucina New Agent）は、**10層の認知アーキテクチャ**を持つ完全ローカル動作の自律AIエージェントです。  
-Ollama + Gemma 4 をLLMバックエンドとし、Linux（RTX 4060 / 8GB VRAM）上で動作します。
+**現在、現行の実装はありません（2026-08時点）。** 最新の実装（lucina-NA）は `archive/v5-lucina-na/` にアーカイブされ、ルートはアーカイブのみの状態です。次世代アーキテクチャは設計中です。
+
+---
+
+## 過去のプロジェクト（archive）
+
+以下のプロジェクトは Project Lucina の各世代の実装記録です。試行錯誤の全過程をアーカイブとして残しています。
+
+### v5: lucina-NA (`archive/v5-lucina-na/`)
+
+**lucina-NA（Lucina New Agent）** — 最新世代。**10層の認知アーキテクチャ**を持つ完全ローカル動作の自律AIエージェント。  
+Ollama + Gemma 4 をLLMバックエンドとし、Linux（RTX 4060 / 8GB VRAM）上で動作。
 
 | 特徴 | 内容 |
 |------|------|
@@ -24,7 +34,7 @@ Ollama + Gemma 4 をLLMバックエンドとし、Linux（RTX 4060 / 8GB VRAM）
 | **会話** | 日本語対応、WebSocketチャット、IPC通信（会話履歴保持） |
 | **起動** | `./lucina.sh` ワンクリック起動（スーパーバイザー付き自動再起動） |
 
-### 起動方法
+#### 起動方法
 
 ```bash
 # ワンクリック起動（デーモン + WebUI をスーパーバイザー監視下で起動・自動再起動）
@@ -49,9 +59,9 @@ python main.py --benchmark
 
 > **lucina.sh** はデーモンとWebUIの両方を監視します。終了コード42で再起動を要求、`data/run/*.wanted` フラグで常駐を制御します。デスクトップからは `lucina.desktop` で起動可能。
 
-詳細は `lucina-NA/AGENTS.md` または以下のアーキテクチャ図を参照。
+詳細は `archive/v5-lucina-na/AGENTS.md` または以下のアーキテクチャ図を参照。
 
-### 10層アーキテクチャ
+#### 10層アーキテクチャ
 
 ```
 Environment → Memory → Drive → WorldModel → Personality → Planning → Agent
@@ -71,7 +81,7 @@ Environment → Memory → Drive → WorldModel → Personality → Planning →
 | **Learning** | アクション後 | Evaluation ↔ Learning |
 | **Consistency** | 数時間〜日 | LongTermPlanning → Personality |
 
-### WebUI（6タブ）
+#### WebUI（6タブ）
 
 | タブ | 機能 |
 |------|------|
@@ -82,7 +92,7 @@ Environment → Memory → Drive → WorldModel → Personality → Planning →
 | **Plan** | 長期目標・ルーティン・アイデンティティ方針・願望・日記・ワークスペース |
 | **Control** | デーモン / WebUI の起動・停止・再起動（`data/ipc/control.json` 経由） |
 
-### 主要機能（v3.2〜v5.0）
+#### 主要機能（v3.2〜v5.0）
 
 - **FEPサプライズ (v5.0)**: 世界モデルが実際にサプライズ信号を計算（`S = (x−μ)²/σ² + ln σ` のガウス近似による負の対数尤度）。高サプライズ時は駆動の新奇性と学習率が増幅（能動的推論のエピステミック価値）
 - **検証ベンチマーク (M14-M17)**: 実LLMを使わず決定論的な合成サイクルで「層が生きていること」を数字で証明
@@ -98,10 +108,6 @@ Environment → Memory → Drive → WorldModel → Personality → Planning →
 - **会話継続性 (v4.1.2)**: OpencodeセッションIDを再利用し、セッション肥大化を防止
 
 ---
-
-## 過去のプロジェクト（archive）
-
-以下のプロジェクトは lucina-NA に至るまでの試行錯誤の記録です。
 
 ### v1: Monica Core (`archive/v1-lucina/`)
 
@@ -152,36 +158,12 @@ Project-Lucina/
 ├── README.md                   # このファイル
 ├── .gitignore
 │
-├── config.py                   # lucina-NA 設定
-├── main.py                     # lucina-NA エントリポイント
-├── ipc.py                      # プロセス間通信
-├── AGENTS.md                   # クイックリファレンス
-├── PLAN.md                     # 実装計画
-├── lucina.sh                   # ワンクリック起動スクリプト（スーパーバイザー）
-├── lucina.desktop              # デスクトップショートカット
-│
-├── core/                       # lucina-NA コア層
-│   ├── agent/                  # エージェント（ツール実行・自己検証）
-│   ├── drive/                  # ドライブ（動機生成・欲求モデル）
-│   ├── personality/            # パーソナリティ（意思決定・自己モデル）
-│   ├── planning/               # 計画立案
-│   ├── memory/                 # エピソード記憶
-│   ├── evaluation/             # 自己評価
-│   ├── learning/               # 学習（ドライブ調整・tier制）
-│   ├── world_model/            # 世界モデル（予測・想像）
-│   └── long_term_planning/     # 長期計画
-│
-├── environment/                # 環境観測
-├── webui/                      # WebUI（FastAPI、6タブ）
-├── benchmarks/                 # 検証ベンチマーク（予測・アブレーション・記憶）
-├── docs/                       # 仕様書・ナレッジインデックス
-├── tests/                      # テスト（216 tests）
-│
-└── archive/
+└── archive/                    # 全世代の実装記録（現行プロジェクトなし）
     ├── v1-lucina/              # Monica Core（初代）
     ├── v2-monica/              # Monica Dual-LLM
     ├── v3-monica-v8/           # Monica v8 Hybrid / Lucina-Beta
-    └── v4-lucina-nna/          # Lucina-Next（Drive→ロジット連続注入・常時稼働型）
+    ├── v4-lucina-nna/          # Lucina-Next（Drive→ロジット連続注入・常時稼働型）
+    └── v5-lucina-na/           # lucina-NA（10層アーキテクチャ・最新実装）
 ```
 
 ---

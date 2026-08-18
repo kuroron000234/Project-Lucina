@@ -1,0 +1,13 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+data/
+.env
+.env.pi
+*.swp
+.DS_Store
+.hf_cache/
+.opencode/node_modules/
+.opencode/package-lock.json
+.opencode/.gitignore
