@@ -26,11 +26,24 @@ flowchart LR
     U -->|① 会話| C
     C -->|② 検索・想起| M
     M -->|③ 記憶注入| C
-    C -->|④ 【委託: 種別: 内容】| A
-    A -->|⑤ ツール実行| T
-    T -->|⑥ 結果| A
-    A -->|⑦ 自身の思考として還元| C
+    C ==>|④ 【委託: 種別: 内容】| A
+    A ==>|⑤ ツール実行| T
+    T ==>|⑥ 結果| A
+    A ==>|⑦ 自身の思考として還元| C
     C -->|⑧ 応答| U
+
+    style CL fill:#fce4ec,stroke:#ec407a,stroke-width:2px
+    style AL fill:#e3f2fd,stroke:#1e88e5,stroke-width:2px
+    classDef char fill:#f48fb1,stroke:#c2185b,color:#fff,stroke-width:2px
+    classDef agent fill:#42a5f5,stroke:#1565c0,color:#fff,stroke-width:2px
+    classDef tool fill:#4dd0e1,stroke:#00838f,color:#fff,stroke-width:2px
+    classDef mem fill:#ffb74d,stroke:#e65100,color:#fff,stroke-width:2px
+    classDef user fill:#cfd8dc,stroke:#455a64,color:#263238,stroke-width:2px
+    class C char
+    class A agent
+    class T tool
+    class M mem
+    class U user
 ```
 
 **2 層を役割で分離**しています。
@@ -85,6 +98,20 @@ flowchart TD
     J --> K{"最高スコア ≈ 0?"}
     K -- "Yes" --> L["直近にフォールバック"]
     K -- "No" --> M["結果を返す"]
+
+    style A fill:#e8f5e9,stroke:#2e7d32,stroke-width:2px
+    style B fill:#fff9c4,stroke:#f9a825,stroke-width:2px
+    style C fill:#bbdefb,stroke:#1565c0,stroke-width:2px
+    style D fill:#e3f2fd,stroke:#1976d2,stroke-width:2px
+    style E fill:#bbdefb,stroke:#1565c0,stroke-width:2px
+    style F fill:#bbdefb,stroke:#1565c0,stroke-width:2px
+    style G fill:#ffcc80,stroke:#ef6c00,stroke-width:2px
+    style H fill:#e1bee7,stroke:#8e24aa,stroke-width:2px
+    style I fill:#e3f2fd,stroke:#1976d2,stroke-width:2px
+    style J fill:#fff9c4,stroke:#f9a825,stroke-width:2px
+    style K fill:#fff9c4,stroke:#f9a825,stroke-width:2px
+    style L fill:#ffcdd2,stroke:#c62828,stroke-width:2px
+    style M fill:#c8e6c9,stroke:#2e7d32,stroke-width:2px
 ```
 
 **フォールバック**: 完全にミスした検索（全スコア < 0.05）は直近記憶にフォールバックします。
@@ -99,9 +126,15 @@ flowchart TD
 sequenceDiagram
     participant U as ユーザー
     participant O as Orchestrator
-    participant M as Memory
-    participant C as キャラ層 (ローカル)
-    participant A as エージェント層 (API)
+    rect rgba(255, 183, 77, 0.2)
+        participant M as Memory
+    end
+    rect rgba(244, 143, 177, 0.2)
+        participant C as キャラ層 (ローカル)
+    end
+    rect rgba(66, 165, 245, 0.2)
+        participant A as エージェント層 (API)
+    end
 
     U->>O: 入力
     activate O
@@ -132,7 +165,7 @@ sequenceDiagram
 
 ```mermaid
 flowchart TD
-    START(["自律ループ起動"]) --> TICK["_tick()"]
+    START["自律ループ起動"] --> TICK["_tick()"]
     TICK --> CONV{"30分経過?"}
     CONV -- "Yes" --> CONS["consolidate() 統合"]
     CONS --> F1["1. forget() 忘却"]
@@ -155,6 +188,23 @@ flowchart TD
     N --> SLEEP["300秒待機"]
     SAVE --> SLEEP
     SLEEP --> TICK
+
+    style START fill:#c8e6c9,stroke:#2e7d32,stroke-width:2px
+    style TICK fill:#e3f2fd,stroke:#1976d2,stroke-width:2px
+    style CONV fill:#fff9c4,stroke:#f9a825,stroke-width:2px
+    style CONS fill:#ffcc80,stroke:#ef6c00,stroke-width:2px
+    style F1 fill:#ffcc80,stroke:#ef6c00,stroke-width:2px
+    style F2 fill:#ffcc80,stroke:#ef6c00,stroke-width:2px
+    style F3 fill:#ffcc80,stroke:#ef6c00,stroke-width:2px
+    style F4 fill:#ffcc80,stroke:#ef6c00,stroke-width:2px
+    style DEC fill:#e3f2fd,stroke:#1976d2,stroke-width:2px
+    style STATE fill:#e3f2fd,stroke:#1976d2,stroke-width:2px
+    style ACT fill:#fff9c4,stroke:#f9a825,stroke-width:2px
+    style R fill:#c8e6c9,stroke:#2e7d32,stroke-width:2px
+    style X fill:#e1bee7,stroke:#8e24aa,stroke-width:2px
+    style N fill:#b0bec5,stroke:#455a64,stroke-width:2px
+    style SAVE fill:#e1bee7,stroke:#8e24aa,stroke-width:2px
+    style SLEEP fill:#b0bec5,stroke:#455a64,stroke-width:2px
 ```
 
 | 駆動値 | 条件 | 動作 |
