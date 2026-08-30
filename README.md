@@ -12,7 +12,6 @@
 ## 🧭 全体像
 
 ```mermaid
-%%{init: {"theme": "base", "themeVariables": {"fontSize": "18px"}, "flowchart": {"nodeSpacing": 60, "rankSpacing": 80, "padding": 20}}}%%
 flowchart LR
     subgraph CL["キャラ層（ローカル）<br/>Ollama: g4-midnight-macaw-v2"]
         C["モニカ（人格・記憶・感情）<br/>決める: 何をしたいか"]
@@ -99,7 +98,6 @@ flowchart TD
 キャラ層が応答しつつ委託判断→エージェント層が実行→結果を「自身の思考」として咀嚼して再生成、という流れです。
 
 ```mermaid
-%%{init: {"theme": "base", "themeVariables": {"fontSize": "17px"}, "sequence": {"actorMargin": 80, "messageMargin": 60, "activationWidth": 14, "boxMargin": 15}}}%%
 sequenceDiagram
     autonumber
     participant U as ユーザー
