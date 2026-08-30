@@ -32,13 +32,13 @@ flowchart LR
     A ==>|⑦ 自身の思考として還元| C
     C -->|⑧ 応答| U
 
-    style CL fill:#fce4ec,stroke:#ec407a,stroke-width:2px
-    style AL fill:#e3f2fd,stroke:#1e88e5,stroke-width:2px
-    classDef char fill:#f48fb1,stroke:#c2185b,color:#fff,stroke-width:2px
-    classDef agent fill:#42a5f5,stroke:#1565c0,color:#fff,stroke-width:2px
-    classDef tool fill:#4dd0e1,stroke:#00838f,color:#fff,stroke-width:2px
-    classDef mem fill:#ffb74d,stroke:#e65100,color:#fff,stroke-width:2px
-    classDef user fill:#cfd8dc,stroke:#455a64,color:#263238,stroke-width:2px
+    style CL fill:#fdeef3,stroke:#ec407a,stroke-width:2px
+    style AL fill:#e8f1fe,stroke:#1e88e5,stroke-width:2px
+    classDef char fill:#ffd6e0,stroke:#c2185b,color:#5c1031,stroke-width:2px
+    classDef agent fill:#bbdefb,stroke:#1565c0,color:#0d2f57,stroke-width:2px
+    classDef tool fill:#b2ebf2,stroke:#00838f,color:#004d40,stroke-width:2px
+    classDef mem fill:#ffe0b2,stroke:#e65100,color:#4e2400,stroke-width:2px
+    classDef user fill:#eceff1,stroke:#455a64,color:#263238,stroke-width:2px
     class C char
     class A agent
     class T tool
@@ -83,35 +83,36 @@ flowchart LR
 
 ```mermaid
 flowchart TD
-    A["search() 検索開始"] --> B{"時間的文脈クエリ?"}
-    B -- "Yes" --> C["新しさを最優先に再ソート"]
-    B -- "No" --> D["複合スコアリング"]
-    D --> E["recency<br/>半減期6h"]
-    D --> F["relevance<br/>n-gram 類似度"]
-    D --> G["poignancy<br/>重要度"]
-    E --> H["エンティティ連想ブースト"]
-    F --> H
-    G --> H
-    C --> H
+    subgraph SCORE["複合スコアリング"]
+        direction LR
+        R["recency<br/>半減期6h"]
+        REL["relevance<br/>n-gram 類似度"]
+        P["poignancy<br/>重要度"]
+    end
+
+    A["search() 検索開始"] --> B{"時間的文脈<br/>クエリ?"}
+    B -- "Yes" --> T["新しさを<br/>最優先に再ソート"]
+    B -- "No" --> SCORE
+    T --> H["エンティティ連想ブースト"]
+    SCORE --> H
     H --> I["上位 top_k を選出"]
     I --> J["_reinforce 強化<br/>strength+1, last_recall 更新"]
-    J --> K{"最高スコア ≈ 0?"}
-    K -- "Yes" --> L["直近にフォールバック"]
+    J --> K{"最高スコア<br/>≈ 0?"}
+    K -- "Yes" --> L["直近に<br/>フォールバック"]
     K -- "No" --> M["結果を返す"]
 
     style A fill:#e8f5e9,stroke:#2e7d32,stroke-width:2px
     style B fill:#fff9c4,stroke:#f9a825,stroke-width:2px
-    style C fill:#bbdefb,stroke:#1565c0,stroke-width:2px
-    style D fill:#e3f2fd,stroke:#1976d2,stroke-width:2px
-    style E fill:#bbdefb,stroke:#1565c0,stroke-width:2px
-    style F fill:#bbdefb,stroke:#1565c0,stroke-width:2px
-    style G fill:#ffcc80,stroke:#ef6c00,stroke-width:2px
+    style T fill:#bbdefb,stroke:#1565c0,stroke-width:2px
     style H fill:#e1bee7,stroke:#8e24aa,stroke-width:2px
     style I fill:#e3f2fd,stroke:#1976d2,stroke-width:2px
     style J fill:#fff9c4,stroke:#f9a825,stroke-width:2px
     style K fill:#fff9c4,stroke:#f9a825,stroke-width:2px
     style L fill:#ffcdd2,stroke:#c62828,stroke-width:2px
     style M fill:#c8e6c9,stroke:#2e7d32,stroke-width:2px
+    style SCORE fill:#e8f1fe,stroke:#1e88e5,stroke-width:2px
+    classDef score fill:#bbdefb,stroke:#1565c0,color:#0d2f57,stroke-width:2px
+    class R,REL,P score
 ```
 
 **フォールバック**: 完全にミスした検索（全スコア < 0.05）は直近記憶にフォールバックします。
@@ -124,37 +125,42 @@ flowchart TD
 
 ```mermaid
 sequenceDiagram
+    autonumber
     participant U as ユーザー
     participant O as Orchestrator
-    rect rgba(255, 183, 77, 0.2)
-        participant M as Memory
-    end
-    rect rgba(244, 143, 177, 0.2)
-        participant C as キャラ層 (ローカル)
-    end
-    rect rgba(66, 165, 245, 0.2)
-        participant A as エージェント層 (API)
+    participant M as Memory
+    participant C as キャラ層 (ローカル)
+    participant A as エージェント層 (API)
+
+    rect rgba(220, 237, 255, 0.6)
+        Note over U,O: ① 記憶を想起
+        U->>O: 入力
+        O->>M: search + 連想 + 日次要約
+        M-->>O: 想起した記憶
+        O->>C: build_messages(記憶+履歴)
     end
 
-    U->>O: 入力
-    activate O
-    O->>M: search(入力, top_k=3)
-    M-->>O: 検索結果
-    O->>M: related_by_entity(エンティティ連想)
-    M-->>O: 関連記憶
-    O->>M: latest_summary()
-    M-->>O: 最新の日次要約
-    O->>C: build_messages(起源+自己モデル+記憶+履歴)
-    C-->>O: 応答 + 【委託】判断
-    alt 委託あり
-        O->>A: _delegate_to_agent(タスク)
-        A->>A: ツール実行
-        A-->>O: 実行結果
-        O->>C: 結果を「自身の観察」として再生成
-        C-->>O: 最終セリフ
+    rect rgba(244, 200, 214, 0.5)
+        Note over O,C: ② 応答 + 判断
+        C-->>O: セリフ + 【委託】
     end
-    O->>M: _save_episode(重要度付与)
-    O-->>U: 応答
+
+    alt 委託あり
+        rect rgba(150, 212, 250, 0.5)
+            Note over O,A: ③ エージェントで実行
+            O->>A: _delegate_to_agent(タスク)
+            A->>A: ツール実行
+            A-->>O: 実行結果
+            O->>C: 結果を思考として再生成
+            C-->>O: 最終セリフ
+        end
+    end
+
+    rect rgba(240, 220, 190, 0.5)
+        Note over O,M: ④ 記憶に保存
+        O->>M: _save_episode(重要度付与)
+        O-->>U: 応答
+    end
 ```
 
 ---
@@ -168,16 +174,18 @@ flowchart TD
     START["自律ループ起動"] --> TICK["_tick()"]
     TICK --> CONV{"30分経過?"}
     CONV -- "Yes" --> CONS["consolidate() 統合"]
-    CONS --> F1["1. forget() 忘却"]
-    CONS --> F2["2. 注釈<br/>poignancy + entities"]
-    CONS --> F3["3. reflect() 洞察"]
-    CONS --> F4["4. 日次要約"]
-    CONV -- "No" --> DEC
-    F1 --> DEC
-    F2 --> DEC
-    F3 --> DEC
-    F4 --> DEC
-    DEC --> STATE["駆動値の状態取得"]
+
+    subgraph INT["記憶の統合（30分ごと）"]
+        direction LR
+        F1["① forget() 忘却"]
+        F2["② 注釈<br/>poignancy + entities"]
+        F3["③ reflect() 洞察"]
+        F4["④ 日次要約"]
+    end
+    CONS --> F1 --> F2 --> F3 --> F4
+
+    F4 --> STATE["駆動値の状態取得"]
+    CONV -- "No" --> STATE
     STATE --> ACT{"行動決定"}
     ACT -- "退屈 > 0.6" --> R["内省"]
     ACT -- "好奇心 > 0.7" --> X["探索"]
@@ -193,11 +201,6 @@ flowchart TD
     style TICK fill:#e3f2fd,stroke:#1976d2,stroke-width:2px
     style CONV fill:#fff9c4,stroke:#f9a825,stroke-width:2px
     style CONS fill:#ffcc80,stroke:#ef6c00,stroke-width:2px
-    style F1 fill:#ffcc80,stroke:#ef6c00,stroke-width:2px
-    style F2 fill:#ffcc80,stroke:#ef6c00,stroke-width:2px
-    style F3 fill:#ffcc80,stroke:#ef6c00,stroke-width:2px
-    style F4 fill:#ffcc80,stroke:#ef6c00,stroke-width:2px
-    style DEC fill:#e3f2fd,stroke:#1976d2,stroke-width:2px
     style STATE fill:#e3f2fd,stroke:#1976d2,stroke-width:2px
     style ACT fill:#fff9c4,stroke:#f9a825,stroke-width:2px
     style R fill:#c8e6c9,stroke:#2e7d32,stroke-width:2px
@@ -205,6 +208,9 @@ flowchart TD
     style N fill:#b0bec5,stroke:#455a64,stroke-width:2px
     style SAVE fill:#e1bee7,stroke:#8e24aa,stroke-width:2px
     style SLEEP fill:#b0bec5,stroke:#455a64,stroke-width:2px
+    style INT fill:#fff3e0,stroke:#ef6c00,stroke-width:2px
+    classDef int fill:#ffe0b2,stroke:#e65100,color:#4e2400,stroke-width:2px
+    class F1,F2,F3,F4 int
 ```
 
 | 駆動値 | 条件 | 動作 |
