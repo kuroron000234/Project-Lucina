@@ -12,32 +12,25 @@
 ## 🧭 全体像
 
 ```mermaid
-graph TD
-    subgraph Character_Layer["キャラ層（ローカル）"]
-        LLM["G4-Midnight-Macaw-26B<br/>Ollama ネイティブ API"]
-        CHAR["character.py<br/>不変核・状態"]
-        PROMPT["prompt.py<br/>フレーム + 文脈注入"]
+flowchart LR
+    subgraph CL["キャラ層（ローカル）<br/>Ollama: g4-midnight-macaw-v2"]
+        C["モニカ（人格・記憶・感情）<br/>決める: 何をしたいか"]
     end
-    subgraph Agent_Layer["エージェント層（API）"]
-        AGENT["laguna-s-2.1-free<br/>OpenCode Zen (LangGraph)"]
-        TOOLS["Web検索 / URL / ファイル<br/>コード実行 / 天気"]
+    subgraph AL["エージェント層（API）<br/>OpenCode Zen: laguna-s-2.1-free"]
+        A["思考・実行"]
+        T["Web検索 / URL / ファイル /<br/>コード実行 / 天気"]
     end
-    subgraph Memory_Store["記憶"]
-        EPI["Episode 記憶<br/>data/episodes/*.json"]
-        SUM["日次要約<br/>data/summaries/*.txt"]
-    end
-    USER(("ユーザー"))
-    USER -->|会話| LLM
-    LLM --> PROMPT
-    CHAR --> PROMPT
-    PROMPT --> LLM
-    LLM -->|検索・想起| EPI
-    LLM -->|日次要約 注入| SUM
-    LLM -.->|【委託: 種別: 内容】| AGENT
-    AGENT --> TOOLS
-    TOOLS -->|実行結果| AGENT
-    AGENT -.->|自身の思考として還元| LLM
-    LLM -->|応答| USER
+    M[("記憶<br/>data/episodes + summaries")]
+    U(("ユーザー"))
+
+    U -->|① 会話| C
+    C -->|② 検索・想起| M
+    M -->|③ 記憶注入| C
+    C -->|④ 【委託: 種別: 内容】| A
+    A -->|⑤ ツール実行| T
+    T -->|⑥ 結果| A
+    A -->|⑦ 自身の思考として還元| C
+    C -->|⑧ 応答| U
 ```
 
 **2 層を役割で分離**しています。
