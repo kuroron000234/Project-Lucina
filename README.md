@@ -31,19 +31,6 @@ flowchart LR
     T ==>|⑥ 結果| A
     A ==>|⑦ 自身の思考として還元| C
     C -->|⑧ 応答| U
-
-    style CL fill:#fdeef3,stroke:#ec407a,stroke-width:2px
-    style AL fill:#e8f1fe,stroke:#1e88e5,stroke-width:2px
-    classDef char fill:#f8bbd0,stroke:#c2185b,stroke-width:2px
-    classDef agent fill:#90caf9,stroke:#1565c0,stroke-width:2px
-    classDef tool fill:#80deea,stroke:#00838f,stroke-width:2px
-    classDef mem fill:#ffcc80,stroke:#e65100,stroke-width:2px
-    classDef user fill:#cfd8dc,stroke:#455a64,stroke-width:2px
-    class C char
-    class A agent
-    class T tool
-    class M mem
-    class U user
 ```
 
 **2 層を役割で分離**しています。
@@ -100,19 +87,6 @@ flowchart TD
     J --> K{"最高スコア<br/>≈ 0?"}
     K -- "Yes" --> L["直近に<br/>フォールバック"]
     K -- "No" --> M["結果を返す"]
-
-    style A fill:#c8e6c9,stroke:#2e7d32,stroke-width:2px
-    style B fill:#fff9c4,stroke:#f9a825,stroke-width:2px
-    style T fill:#bbdefb,stroke:#1565c0,stroke-width:2px
-    style H fill:#e1bee7,stroke:#8e24aa,stroke-width:2px
-    style I fill:#bbdefb,stroke:#1976d2,stroke-width:2px
-    style J fill:#fff9c4,stroke:#f9a825,stroke-width:2px
-    style K fill:#fff9c4,stroke:#f9a825,stroke-width:2px
-    style L fill:#ffcdd2,stroke:#c62828,stroke-width:2px
-    style M fill:#c8e6c9,stroke:#2e7d32,stroke-width:2px
-    style SCORE fill:#e8f1fe,stroke:#1e88e5,stroke-width:2px
-    classDef score fill:#bbdefb,stroke:#1565c0,stroke-width:2px
-    class R,REL,P score
 ```
 
 **フォールバック**: 完全にミスした検索（全スコア < 0.05）は直近記憶にフォールバックします。
@@ -132,35 +106,27 @@ sequenceDiagram
     participant C as キャラ層 (ローカル)
     participant A as エージェント層 (API)
 
-    rect rgb(211, 228, 255)
-        Note over U,O: ① 記憶を想起
-        U->>O: 入力
-        O->>M: search + 連想 + 日次要約
-        M-->>O: 想起した記憶
-        O->>C: build_messages(記憶+履歴)
-    end
+    Note over U,O: ① 記憶を想起
+    U->>O: 入力
+    O->>M: search + 連想 + 日次要約
+    M-->>O: 想起した記憶
+    O->>C: build_messages(記憶+履歴)
 
-    rect rgb(255, 205, 220)
-        Note over O,C: ② 応答 + 判断
-        C-->>O: セリフ + 【委託】
-    end
+    Note over O,C: ② 応答 + 判断
+    C-->>O: セリフ + 【委託】
 
     alt 委託あり
-        rect rgb(186, 228, 255)
-            Note over O,A: ③ エージェントで実行
-            O->>A: _delegate_to_agent(タスク)
-            A->>A: ツール実行
-            A-->>O: 実行結果
-            O->>C: 結果を思考として再生成
-            C-->>O: 最終セリフ
-        end
+        Note over O,A: ③ エージェントで実行
+        O->>A: _delegate_to_agent(タスク)
+        A->>A: ツール実行
+        A-->>O: 実行結果
+        O->>C: 結果を思考として再生成
+        C-->>O: 最終セリフ
     end
 
-    rect rgb(255, 232, 200)
-        Note over O,M: ④ 記憶に保存
-        O->>M: _save_episode(重要度付与)
-        O-->>U: 応答
-    end
+    Note over O,M: ④ 記憶に保存
+    O->>M: _save_episode(重要度付与)
+    O-->>U: 応答
 ```
 
 ---
@@ -196,21 +162,6 @@ flowchart TD
     N --> SLEEP["300秒待機"]
     SAVE --> SLEEP
     SLEEP --> TICK
-
-    style START fill:#c8e6c9,stroke:#2e7d32,stroke-width:2px
-    style TICK fill:#e3f2fd,stroke:#1976d2,stroke-width:2px
-    style CONV fill:#fff9c4,stroke:#f9a825,stroke-width:2px
-    style CONS fill:#ffcc80,stroke:#ef6c00,stroke-width:2px
-    style STATE fill:#e3f2fd,stroke:#1976d2,stroke-width:2px
-    style ACT fill:#fff9c4,stroke:#f9a825,stroke-width:2px
-    style R fill:#c8e6c9,stroke:#2e7d32,stroke-width:2px
-    style X fill:#e1bee7,stroke:#8e24aa,stroke-width:2px
-    style N fill:#b0bec5,stroke:#455a64,stroke-width:2px
-    style SAVE fill:#e1bee7,stroke:#8e24aa,stroke-width:2px
-    style SLEEP fill:#b0bec5,stroke:#455a64,stroke-width:2px
-    style INT fill:#fff3e0,stroke:#ef6c00,stroke-width:2px
-    classDef int fill:#ffe0b2,stroke:#e65100,stroke-width:2px
-    class F1,F2,F3,F4 int
 ```
 
 | 駆動値 | 条件 | 動作 |
