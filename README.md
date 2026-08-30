@@ -34,11 +34,11 @@ flowchart LR
 
     style CL fill:#fdeef3,stroke:#ec407a,stroke-width:2px
     style AL fill:#e8f1fe,stroke:#1e88e5,stroke-width:2px
-    classDef char fill:#ffd6e0,stroke:#c2185b,color:#5c1031,stroke-width:2px
-    classDef agent fill:#bbdefb,stroke:#1565c0,color:#0d2f57,stroke-width:2px
-    classDef tool fill:#b2ebf2,stroke:#00838f,color:#004d40,stroke-width:2px
-    classDef mem fill:#ffe0b2,stroke:#e65100,color:#4e2400,stroke-width:2px
-    classDef user fill:#eceff1,stroke:#455a64,color:#263238,stroke-width:2px
+    classDef char fill:#f8bbd0,stroke:#c2185b,stroke-width:2px
+    classDef agent fill:#90caf9,stroke:#1565c0,stroke-width:2px
+    classDef tool fill:#80deea,stroke:#00838f,stroke-width:2px
+    classDef mem fill:#ffcc80,stroke:#e65100,stroke-width:2px
+    classDef user fill:#cfd8dc,stroke:#455a64,stroke-width:2px
     class C char
     class A agent
     class T tool
@@ -101,17 +101,17 @@ flowchart TD
     K -- "Yes" --> L["直近に<br/>フォールバック"]
     K -- "No" --> M["結果を返す"]
 
-    style A fill:#e8f5e9,stroke:#2e7d32,stroke-width:2px
+    style A fill:#c8e6c9,stroke:#2e7d32,stroke-width:2px
     style B fill:#fff9c4,stroke:#f9a825,stroke-width:2px
     style T fill:#bbdefb,stroke:#1565c0,stroke-width:2px
     style H fill:#e1bee7,stroke:#8e24aa,stroke-width:2px
-    style I fill:#e3f2fd,stroke:#1976d2,stroke-width:2px
+    style I fill:#bbdefb,stroke:#1976d2,stroke-width:2px
     style J fill:#fff9c4,stroke:#f9a825,stroke-width:2px
     style K fill:#fff9c4,stroke:#f9a825,stroke-width:2px
     style L fill:#ffcdd2,stroke:#c62828,stroke-width:2px
     style M fill:#c8e6c9,stroke:#2e7d32,stroke-width:2px
     style SCORE fill:#e8f1fe,stroke:#1e88e5,stroke-width:2px
-    classDef score fill:#bbdefb,stroke:#1565c0,color:#0d2f57,stroke-width:2px
+    classDef score fill:#bbdefb,stroke:#1565c0,stroke-width:2px
     class R,REL,P score
 ```
 
@@ -132,7 +132,7 @@ sequenceDiagram
     participant C as キャラ層 (ローカル)
     participant A as エージェント層 (API)
 
-    rect rgba(220, 237, 255, 0.6)
+    rect rgb(211, 228, 255)
         Note over U,O: ① 記憶を想起
         U->>O: 入力
         O->>M: search + 連想 + 日次要約
@@ -140,13 +140,13 @@ sequenceDiagram
         O->>C: build_messages(記憶+履歴)
     end
 
-    rect rgba(244, 200, 214, 0.5)
+    rect rgb(255, 205, 220)
         Note over O,C: ② 応答 + 判断
         C-->>O: セリフ + 【委託】
     end
 
     alt 委託あり
-        rect rgba(150, 212, 250, 0.5)
+        rect rgb(186, 228, 255)
             Note over O,A: ③ エージェントで実行
             O->>A: _delegate_to_agent(タスク)
             A->>A: ツール実行
@@ -156,7 +156,7 @@ sequenceDiagram
         end
     end
 
-    rect rgba(240, 220, 190, 0.5)
+    rect rgb(255, 232, 200)
         Note over O,M: ④ 記憶に保存
         O->>M: _save_episode(重要度付与)
         O-->>U: 応答
@@ -209,7 +209,7 @@ flowchart TD
     style SAVE fill:#e1bee7,stroke:#8e24aa,stroke-width:2px
     style SLEEP fill:#b0bec5,stroke:#455a64,stroke-width:2px
     style INT fill:#fff3e0,stroke:#ef6c00,stroke-width:2px
-    classDef int fill:#ffe0b2,stroke:#e65100,color:#4e2400,stroke-width:2px
+    classDef int fill:#ffe0b2,stroke:#e65100,stroke-width:2px
     class F1,F2,F3,F4 int
 ```
 
