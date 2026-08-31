@@ -13,14 +13,14 @@
 
 ```mermaid
 flowchart LR
-    subgraph CL["キャラ層（ローカル）<br/>Ollama: g4-midnight-macaw-v2"]
-        C["モニカ（人格・記憶・感情）<br/>決める: 何をしたいか"]
+    subgraph CL["キャラ層（ローカル）\nOllama: g4-midnight-macaw-v2"]
+        C["モニカ（人格・記憶・感情）\n決める: 何をしたいか"]
     end
-    subgraph AL["エージェント層（API）<br/>OpenCode Zen: laguna-s-2.1-free"]
+    subgraph AL["エージェント層（API）\nOpenCode Zen: laguna-s-2.1-free"]
         A["思考・実行"]
-        T["Web検索 / URL / ファイル /<br/>コード実行 / 天気"]
+        T["Web検索 / URL / ファイル /\nコード実行 / 天気"]
     end
-    M[("記憶<br/>data/episodes + summaries")]
+    M[("記憶\ndata/episodes + summaries")]
     U(("ユーザー"))
 
     U -->|① 会話| C
