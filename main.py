@@ -3,13 +3,16 @@
 Project Lucina v6 — モニカとしてのAIキャラクター
 """
 
-import sys
 import logging
+import os
+import sys
+import threading
 from pathlib import Path
 
 # プロジェクトルートをパスに追加
 sys.path.insert(0, str(Path(__file__).parent / "src"))
 
+from lucina.loop import Loop
 from lucina.orchestrator import Orchestrator
 
 logging.basicConfig(
@@ -28,20 +31,28 @@ def main():
 
     orch = Orchestrator(model="g4-midnight-macaw-v2")
 
-    while True:
-        try:
-            user_input = input("あなた > ").strip()
-            if not user_input:
-                continue
-            if user_input.lower() in ["exit", "quit"]:
+    # 自律ループをバックグラウンドで起動（ユーザーがいない間も世界は動く）
+    loop = Loop(orch, interval=int(os.getenv("LUCINA_LOOP_INTERVAL", "300")))
+    t = threading.Thread(target=loop.start, name="autonomous-loop", daemon=True)
+    t.start()
+
+    try:
+        while True:
+            try:
+                user_input = input("あなた > ").strip()
+                if not user_input:
+                    continue
+                if user_input.lower() in ["exit", "quit"]:
+                    break
+
+                response = orch.process(user_input)
+                print(f"モニカ: {response}")
+                print()
+
+            except KeyboardInterrupt:
                 break
-
-            response = orch.process(user_input)
-            print(f"モニカ: {response}")
-            print()
-
-        except KeyboardInterrupt:
-            break
+    finally:
+        loop.stop()
 
     print("\nまた会いましょう。")
 

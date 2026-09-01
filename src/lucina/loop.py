@@ -3,10 +3,14 @@
 """
 
 import logging
+import random
 import time
 from datetime import datetime
 
 logger = logging.getLogger("loop")
+
+# 駆動値キー（character.py の DRIVE_CONFIG と対応）
+DRIVE_KEYS = ("curiosity", "connection", "creation", "loneliness", "boredom")
 
 
 class Loop:
@@ -21,6 +25,7 @@ class Loop:
         self.orchestrator = orchestrator
         self.interval = interval
         self.running = False
+        self._last_tick = time.time()
         self._last_consolidate = 0.0
         self.consolidate_interval = 1800  # 30分ごとに日次要約を更新
 
@@ -47,6 +52,11 @@ class Loop:
     def _tick(self):
         """Single loop iteration."""
         now = datetime.now()
+        elapsed = time.time() - self._last_tick
+        self._last_tick = time.time()
+
+        # 駆動値の時間変動を更新（放置による欲求の成長・親密度の減衰）
+        state = self.orchestrator.character.tick_drives(elapsed, now=now)
 
         # Segmented day-summary（統合）: 一定間隔で実行して常時注入の土台を更新
         if time.time() - self._last_consolidate >= self.consolidate_interval:
@@ -57,8 +67,6 @@ class Loop:
             except Exception as e:
                 logger.error(f"Consolidate error: {e}")
             self._last_consolidate = time.time()
-
-        state = self.orchestrator.character.get_state()
 
         # 駆動値に基づいて行動を決定
         action = self._decide_action(state, now)
@@ -72,7 +80,7 @@ class Loop:
                 timestamp=now,
                 event=action,
                 context="自律的行動",
-                emotion=state.get("current_feeling", "通常"),
+                emotion=state.get("mode", "tatemae"),
                 result="",
                 importance=0.3,
                 tags=["自律"],
@@ -80,33 +88,46 @@ class Loop:
                 driving_drive=self._get_dominant_drive(state),
             )
             self.orchestrator.memory.save(ep)
+            # 満たされた欲求を減らす（relief）
+            self.orchestrator.character.on_autonomous_action(self._action_type(action))
 
     def _decide_action(self, state: dict, now: datetime) -> str | None:
-        """Decide autonomous action based on state and time."""
-        loneliness = state.get("loneliness", 0.3)
-        boredom = state.get("boredom", 0.1)
-        curiosity = state.get("curiosity", 0.3)
+        """駆動値に基づいて自律行動を決定する（ジッタ付き主駆動選択・恒常性式）。"""
+        drives = {k: state.get(k, 0.0) for k in DRIVE_KEYS}
 
-        # 孤独が高い → 待機
-        if loneliness > 0.7:
-            return None
-
-        # 退屈が高い → 内省
-        if boredom > 0.6:
-            return "内省: 自分の記憶を振り返っている"
-
-        # 好奇心が高い → 探索
-        if curiosity > 0.7:
-            return "探索: 新しいことを考えている"
-
-        # 夜間 → 静かにする
+        # 深夜は静かにする（発話の場がないので待つ）
         if now.hour >= 23 or now.hour < 6:
             return None
 
+        # 孤独が高い: 待機（ユーザーを待つ）
+        if state.get("loneliness", 0.0) > 0.7:
+            return None
+
+        # ジッタ付き主駆動選択（拮抗時はランダムになり、毎回同じ行動に収束しない）
+        jitter = 0.10
+        dominant_key = max(
+            drives,
+            key=lambda k: (drives[k] + random.uniform(-jitter, jitter), random.random()),
+        )
+
+        if dominant_key == "curiosity" and drives["curiosity"] > 0.5:
+            return "探索: 新しいことを考えている"
+        if dominant_key == "boredom" and drives["boredom"] > 0.5:
+            return "内省: 自分の記憶を振り返っている"
+        if dominant_key == "creation" and drives["creation"] > 0.45:
+            return "創作: 詩や曲の着想を練っている"
+        if drives["boredom"] > 0.75:
+            return "内省: 何となく居ても立ってもいられない"
         return None
 
+    @staticmethod
+    def _action_type(action: str) -> str:
+        """行動ラベルから駆動値更新用の種別を返す。"""
+        for key in ("内省", "探索", "創作", "待機"):
+            if action.startswith(key):
+                return key
+        return "待機"
+
     def _get_dominant_drive(self, state: dict) -> str:
-        """Get the dominant drive from state."""
-        if not state:
-            return "unknown"
-        return max(state, key=state.get)
+        """駆動値の中から最も強いものを返す。"""
+        return max(DRIVE_KEYS, key=lambda k: state.get(k, 0.0))

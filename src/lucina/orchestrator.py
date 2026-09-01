@@ -105,7 +105,10 @@ class Orchestrator:
         if len(self.chat_history) > self.max_history:
             self.chat_history = self.chat_history[-self.max_history:]
 
-        # 7. エピソード記憶として保存
+        # 7. 駆動値更新（対話成立: 親密度上昇・孤独/退屈の解消・モード再導出）
+        self.character.on_interaction()
+
+        # 8. エピソード記憶として保存
         self._save_episode(user_input, dialogue)
 
         return dialogue
@@ -185,7 +188,7 @@ class Orchestrator:
             timestamp=datetime.now(),
             event=user_input,
             context="対話",
-            emotion=self.character.get_state().get("current_feeling", "通常"),
+            emotion=self.character.get_state().get("mode", "tatemae"),
             result=response[:200],
             importance=importance,
             tags=["対話"],
