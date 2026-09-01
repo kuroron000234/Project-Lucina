@@ -66,6 +66,7 @@ class Orchestrator:
             memory_texts.append(f"[{stamp}] {note}")
 
         # 2. メッセージを構築
+        inner_thought = self._latest_inner_thought()
         messages = build_messages(
             character_data={
                 "seed": self.character.get_seeds(),
@@ -77,6 +78,7 @@ class Orchestrator:
             memory_texts=memory_texts,
             user_message=user_input,
             chat_history=self.chat_history[-self.max_history:],
+            inner_thought=inner_thought,
         )
 
         # 3. キャラ層から応答を生成
@@ -112,6 +114,22 @@ class Orchestrator:
         self._save_episode(user_input, dialogue)
 
         return dialogue
+
+    def _latest_inner_thought(self) -> str | None:
+        """最も新しい内言（独り時間のひとりごと）を返す。なければ None。"""
+        try:
+            eps = self.memory.recent_episodes(n=20)
+            for e in eps:
+                if e.source == "autonomous" and "内言" in (e.tags or []):
+                    if e.result:
+                        return f"[{e.timestamp.strftime('%m/%d %H:%M')}] {e.result.strip()}"
+            for e in eps:
+                if e.source == "autonomous":
+                    if e.event:
+                        return f"[{e.timestamp.strftime('%m/%d %H:%M')}] {e.event.strip()}"
+            return None
+        except Exception:
+            return None
 
     def _parse_response(self, raw: str) -> tuple[str, tuple[str, str] | None]:
         """応答を「セリフ」と「判断ブロック」に分離"""

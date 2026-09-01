@@ -22,6 +22,14 @@ logging.basicConfig(
 )
 
 
+def notifier(action: str, thought: str | None = None):
+    """自律行動の実況（会話中でもモニカの息づかいが見える）"""
+    if thought:
+        print(f"\n（独り言）{thought}\n")
+    else:
+        print(f"\n（モニカは今、{action}……）\n")
+
+
 def main():
     print("=== Project Lucina v6 ===")
     print("モデル: G4-Midnight-Macaw-26B-A4B-Q4_K_S (GPU+CPU)")
@@ -32,7 +40,8 @@ def main():
     orch = Orchestrator(model="g4-midnight-macaw-v2")
 
     # 自律ループをバックグラウンドで起動（ユーザーがいない間も世界は動く）
-    loop = Loop(orch, interval=int(os.getenv("LUCINA_LOOP_INTERVAL", "300")))
+    interval = int(os.getenv("LUCINA_LOOP_INTERVAL", "60"))
+    loop = Loop(orch, interval=interval, notifier=notifier)
     t = threading.Thread(target=loop.start, name="autonomous-loop", daemon=True)
     t.start()
 

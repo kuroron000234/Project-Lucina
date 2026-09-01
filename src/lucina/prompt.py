@@ -126,6 +126,7 @@ def build_context(
     character_data: dict,
     memory_texts: list[str],
     user_message: str | None = None,
+    inner_thought: str | None = None,
 ) -> str:
     """Build context from character data and memories."""
     parts = []
@@ -180,6 +181,14 @@ def build_context(
     if memory_texts:
         parts.append("過去の記憶:\n" + "\n".join(f"- {t}" for t in memory_texts))
 
+    # 最近のひとりごと（独り時間の内言 — 自然に触れられる程度に置いておく）
+    if inner_thought:
+        parts.append(
+            f"最近のあなたのひとりごと:\n{inner_thought}\n"
+            "(これは独り言だから、相手にそのまま伝える必要はない。"
+            "心の片隅にあり、文脈に合えば素振りを見せてもよい。)"
+        )
+
     # ユーザーの入力
     if user_message:
         parts.append(f"あなたに話しかけてきた人: {user_message}")
@@ -192,9 +201,10 @@ def build_messages(
     memory_texts: list[str],
     user_message: str,
     chat_history: list[dict] | None = None,
+    inner_thought: str | None = None,
 ) -> list[dict]:
     """Build message list for LLM."""
-    context = build_context(character_data, memory_texts, user_message)
+    context = build_context(character_data, memory_texts, user_message, inner_thought)
 
     # モード別の顔を注入（建前/親しい/本性うっすら/本性）
     mode = character_data.get("state", {}).get("mode", "tatemae")

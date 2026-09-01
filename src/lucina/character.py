@@ -4,6 +4,7 @@
 
 import json
 import logging
+import random
 from datetime import datetime
 from pathlib import Path
 
@@ -45,7 +46,49 @@ DRIVE_CONFIG = {
         "warm_connection": 0.40,    # 親密度: 親しい建前
         "honne_loneliness": 0.60,   # 孤独: 本性（依存）が滲む
     },
+    # 日周リズム: 時刻帯ごとの駆動値変動倍率（人間の1日の気分の波）
+    "diurnal": {
+        0:  {"curiosity": 0.6, "creation": 0.8, "loneliness": 1.5, "boredom": 1.2,
+             "connection": 1.0},  # 深夜
+        6:  {"curiosity": 1.7, "creation": 1.1, "loneliness": 0.4, "boredom": 0.8,
+             "connection": 1.0},  # 朝
+        12: {"curiosity": 1.0, "creation": 1.2, "loneliness": 0.7, "boredom": 1.0,
+             "connection": 1.0},  # 昼
+        17: {"curiosity": 0.8, "creation": 1.4, "loneliness": 1.1, "boredom": 0.9,
+             "connection": 1.1},  # 夕方
+        21: {"curiosity": 0.7, "creation": 1.2, "loneliness": 1.3, "boredom": 0.8,
+             "connection": 0.6},  # 夜
+    },
+    # 駆動値同士の連動（人間らしい感情の流れ）
+    "coupling": {
+        # 孤独が高いとき、親密度は薄れにくい（独りが絆を育てる）
+        "loneliness_holds_connection": {"loneliness_min": 0.5, "decay_factor": 0.4},
+        # 対話直後は「熱が冷めない」: 直後3時間の親密度減衰を弱める（慣性）
+        "warm_cooldown_hours": 3.0,
+        "warm_decay_factor": 0.4,
+        # 退屈は好奇心を育てる（居ても立ってもいられない → 新しいことを求める）
+        "boredom_feeds_curiosity": 0.02,
+        # 好奇心は創作欲を育てる（興味が創作の土壌になる）
+        "curiosity_feeds_creation": 0.01,
+    },
 }
+
+
+def _diurnal_factors(hour: float) -> dict[str, float]:
+    """時刻帯から各駆動値の変動倍率を補間で求める（人間の1日の気分の波）。"""
+    anchors = sorted(DRIVE_CONFIG["diurnal"].keys())
+    if hour <= anchors[0] or hour >= anchors[-1]:
+        h = max(anchors[0], min(anchors[-1], hour))
+        base = DRIVE_CONFIG["diurnal"][h]
+        return {k: v for k, v in base.items()}
+
+    for i in range(len(anchors) - 1):
+        a, b = anchors[i], anchors[i + 1]
+        if a <= hour <= b:
+            fa, fb = DRIVE_CONFIG["diurnal"][a], DRIVE_CONFIG["diurnal"][b]
+            t = (hour - a) / (b - a)
+            return {k: fa[k] + (fb[k] - fa[k]) * t for k in fa}
+    return {k: 1.0 for k in ("curiosity", "creation", "loneliness", "boredom", "connection")}
 
 
 def _clamp(value: float, delta: float, lo: float = 0.0, hi: float = 1.0) -> float:
@@ -139,6 +182,8 @@ class Character:
                 "loneliness": 0.4,
                 "boredom": 0.1,
                 "mode": "tatemae",
+                "mood": 0.5,          # 気分（ランダムウォーク。行動のもらえ方に揺らぎを与える）
+                "last_interaction_ts": 0.0,  # 直近の対話時刻（親密度に慣性を与える）
             },
             "interactions": 0,
             "created_at": "2026-08-26T00:00:00",
@@ -186,6 +231,11 @@ class Character:
 
         放置中は欲求（好奇心・創作欲・孤独・退屈）がゆっくり育ち、
         親密度（connection）はゆっくり薄れる。トークンゼロコストで更新。
+
+        人間らしさ:
+        - 日周リズム: 朝は好奇心が強い、夜は孤独が育ちやすい等、時刻帯で変動が変わる
+        - 駆動値同士の連動: 孤独が高いと親密度は薄れにくい、退屈が好奇心を育てる等
+        - 親密度に慣性: 対話直後の3時間は「熱が冷めない」
         """
         hours = max(0.0, elapsed_seconds) / 3600.0
         state = self.data.get("state", {})
@@ -193,17 +243,47 @@ class Character:
         growth = DRIVE_CONFIG["urge_growth_per_hour"] * hours
         decay = DRIVE_CONFIG["satisfied_decay_per_hour"] * hours
         mx = DRIVE_CONFIG["urge_max"]
+        cp = DRIVE_CONFIG["coupling"]
+
+        t = now if now is not None else datetime.now()
+        factors = _diurnal_factors(t.hour)
+        since_interaction_h = (
+            max(0.0, t.timestamp() - state.get("last_interaction_ts", 0.0)) / 3600.0
+        )
 
         for key, base in baseline.items():
             cur = state.get(key, base)
+            f = factors.get(key, 1.0)
+
             if key == "connection":
-                nv = cur - decay  # 親密度は放置で薄れる
+                # 親密度は放置で薄れるが、孤独が高いと薄れにくい（独りが絆を育てる）
+                d = decay
+                lon = state.get("loneliness", 0.4)
+                if lon >= cp["loneliness_holds_connection"]["loneliness_min"]:
+                    d *= cp["loneliness_holds_connection"]["decay_factor"]
+                # 対話直後は熱が冷めない（慣性）
+                if since_interaction_h < cp["warm_cooldown_hours"]:
+                    d *= cp["warm_decay_factor"]
+                nv = cur - d * f
             else:
-                nv = min(cur + growth, mx)  # 欲求は放置で育つ（上限付き）
+                grow = (
+                    growth * f
+                    + state.get("boredom", 0.0) * cp["boredom_feeds_curiosity"] * hours
+                )
+                if key == "creation":
+                    grow += state.get("curiosity", 0.2) * cp["curiosity_feeds_creation"] * hours
+                nv = min(cur + grow, mx)
+
             state[key] = round(_clamp(nv, 0.0), 4)
 
+        # 気分は緩やかなランダムウォーク（行動のもらえ方を揺らがせる）
+        mood = state.get("mood", 0.5)
+        drift = random.uniform(-0.03, 0.03) * hours * 4.0
+        mood = _clamp(mood, drift)
+        state["mood"] = round(max(0.0, min(1.0, mood)), 4)
+
         self.data["state"] = state
-        self.derive_mode(now=now)
+        self.derive_mode(now=t)
         self.save()
         return state
 
@@ -212,8 +292,11 @@ class Character:
         state = self.data.get("state", {})
         for key, delta in DRIVE_CONFIG["interaction"].items():
             state[key] = round(_clamp(state.get(key, 0.0), delta), 4)
+        # 対話時刻を記録（親密度に慣性を与える熱の起点）
+        t = now if now is not None else datetime.now()
+        state["last_interaction_ts"] = t.timestamp()
         self.data["state"] = state
-        self.derive_mode(now=now)
+        self.derive_mode(now=t)
         self.save()
 
     def on_autonomous_action(self, action: str):
