@@ -4,6 +4,7 @@ LLMクライアント — OllamaネイティブAPI（Thinkingモード対応）
 
 import json
 import logging
+
 import requests
 
 logger = logging.getLogger("llm")
@@ -41,6 +42,48 @@ class LLM:
         """Send chat messages and return response content (backward compatible)."""
         resp = self.chat_with_thinking(messages, **kwargs)
         return resp.content
+
+    def chat_with_image(
+        self,
+        prompt: str,
+        image_b64: str,
+        *,
+        model: str | None = None,
+        temperature: float = 0.3,
+        max_tokens: int = 160,
+    ) -> str:
+        """画像（base64）を添えて1回だけ問い合わせる（視覚知覚用）。
+
+        キャラ層（g4-midnight-macaw-v2）は vision 非対応のため、
+        別のビジョン対応モデル（既定: qwen3.5:9b）で局面解釈する。
+        文章力重視の心とは分離し、ここは「見る」だけを担う。
+        """
+        used_model = model or "qwen3.5:9b"
+        payload = {
+            "model": used_model,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": prompt,
+                    "images": [image_b64],
+                }
+            ],
+            "think": False,
+            "stream": False,
+            "options": {
+                "temperature": temperature,
+                "num_predict": max_tokens,
+                "num_ctx": 4096,
+            },
+        }
+        try:
+            r = requests.post(f"{self.base_url}/api/chat", json=payload, timeout=90)
+            r.raise_for_status()
+            data = r.json()
+            return (data.get("message", {}).get("content", "") or "").strip()
+        except Exception as e:
+            logger.error("Vision LLM call failed: %s", e)
+            return "（視覚解釈に失敗）"
 
     def chat_with_thinking(self, messages: list[dict], **kwargs) -> LLMResponse:
         """Send chat messages and return both thinking and content."""

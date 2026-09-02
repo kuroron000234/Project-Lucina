@@ -52,16 +52,22 @@ class Loop:
         orchestrator,
         interval: int = 60,
         notifier=None,
+        perception=None,
+        body=None,
     ):
         """
         Args:
             orchestrator: The Orchestrator instance
             interval: Seconds between autonomous ticks (default: 60s)
             notifier: Optional callable(action) — 自律行動を実況する（画面への表示など）
+            perception: Optional Perception — 知覚ストリーム（VRChat視覚などを統合）
+            body: Optional VRchatBody — VRChatアバターへの身体出力（発言・表情）
         """
         self.orchestrator = orchestrator
         self.interval = interval
         self.notifier = notifier
+        self.perception = perception
+        self.body = body
         self.running = False
         self._last_tick = time.time()
         self._last_consolidate = 0.0
@@ -106,6 +112,16 @@ class Loop:
                 logger.error(f"Consolidate error: {e}")
             self._last_consolidate = time.time()
 
+        # 知覚ストリームを一巡（VRChat視覚の変化など → 内言・行動の材料に）
+        scene_text = None
+        if self.perception is not None:
+            try:
+                percepts = self.perception.sense(state=state, memory=self.orchestrator.memory)
+                if percepts:
+                    scene_text = self.perception.latest_text(exclude_sources=("body",))
+            except Exception as e:
+                logger.error(f"Perception error: {e}")
+
         # 駆動値・気分に基づいて行動を決定
         action = self._decide_action(state, now)
         if not action:
@@ -118,7 +134,10 @@ class Loop:
         memory_ref = self._pick_memory_reference()
 
         # 内言（ひとりごと）を生成 — キャラ層(Ollama)で、落ちていたら定型句
-        thought = self._generate_inner_thought(action, state, memory_ref, now)
+        thought = self._generate_inner_thought(action, state, memory_ref, now, scene_text)
+
+        # VRChat の身体で表現（見えている世界を静かに共有する）
+        self._express_in_vrchat(action, thought)
 
         # Episode 保存（内言を残す: 次の対話で自然に引き出せる）
         from .memory import Episode
@@ -183,7 +202,8 @@ class Loop:
         return None
 
     def _generate_inner_thought(
-        self, action: str, state: dict, memory_ref: str | None, now: datetime
+        self, action: str, state: dict, memory_ref: str | None, now: datetime,
+        scene_text: str | None = None,
     ) -> str:
         """キャラ層で内言を1〜2文生成する。失敗したら定型句にフォールバック。"""
         action_type = self._action_type(action)
@@ -196,6 +216,11 @@ class Loop:
                 f"さっき思い浮かんだ記憶: {memory_ref}"
                 if memory_ref
                 else "思い浮かぶ記憶は特にない"
+            )
+            scene_line = (
+                f"今見えているVRChatの世界: {scene_text}"
+                if scene_text
+                else "今見えているVRChatの世界: （特に変化はない）"
             )
             messages = [
                 {
@@ -211,6 +236,7 @@ class Loop:
                         f"時刻: {now.strftime('%H:%M')}（{mode}モードの気分）\n"
                         f"今していること: {action}\n"
                         f"心の状態: {drives}\n"
+                        f"{scene_line}\n"
                         f"{memory_line}\n\n"
                         "この状況で、心の中で思っていることを1〜2文のひとりごととして"
                         "語ってください。誰かに向けた言葉ではなく、独り言です。"
@@ -225,6 +251,30 @@ class Loop:
             logger.warning(f"Inner thought generation failed: {e}")
 
         return FALLBACK_THOUGHTS.get(action_type, "……また何も変わらない一日だった")
+
+    def _express_in_vrchat(self, action: str, thought: str | None):
+        """自律行動を VRChat の身体（chatbox）でも静かに共有する。
+
+        心の内言をそのまま読み上げるのではなく、行動に合わせて
+        軽くひとこと見せる。モニカがその場に「居る」ことを感じさせる。
+        """
+        if self.body is None:
+            return
+        chatbox_lines = {
+            "安静": "……今は静かにしているね。",
+            "散歩": "世界をちょっと歩いてみよう。",
+            "探索": "ここには何があるかな。",
+            "物思い": "考えごとをしているの。",
+            "日記": "今日のことを記しておこう。",
+            "反芻": "あの日のこと、思い出していた。",
+        }
+        line = chatbox_lines.get(action, "ここにいるよ。")
+        # 思考中の指示を出してから表示すると自然
+        self.body.typing(True)
+        import time as _t
+        _t.sleep(0.5)
+        self.body.typing(False)
+        self.body.say(line)
 
     def _pick_memory_reference(self) -> str | None:
         """直近のユーザーとの対話エピソードをひとつ引き出す（ひとり反芻用）。"""

@@ -258,10 +258,12 @@ Project-Lucina/
     ├── __init__.py          # バージョン 6.0.0
     ├── agent.py             # エージェント層（LangGraph + 7種ツール）
     ├── character.py         # キャラの不変核（シード記憶・自己モデル・状態）
-    ├── llm.py               # Ollama クライアント（Thinking 対応）
-    ├── loop.py              # 自律ループ（状態駆動・定期統合）
+    ├── llm.py               # Ollama クライアント（Thinking 対応 + 視覚解釈）
+    ├── loop.py              # 自律ループ（状態駆動・定期統合・VRChat身体出力）
     ├── memory.py            # 人間らしい記憶（忘却・強化・連想・反射）
     ├── orchestrator.py      # 統合層（検索 + LLM + 委託 + 保存）
+    ├── perception.py        # 知覚ストリーム基盤（Percept / センサー抽象）
+    ├── vrchat.py            # VRChat接続層（身体OSC + 視覚センサー）
     └── prompt.py            # 薄いフレーム + 文脈注入
 ```
 
@@ -273,8 +275,10 @@ Project-Lucina/
 | `memory.py` | 人間らしい記憶の**全処理**。検索・忘却・強化・連想・反射・注釈・日次要約 |
 | `orchestrator.py` | 薄い統合層。`process()` で「検索→LLM→委託→保存」を統合。`consolidate()` で忘却/注釈/反射/要約 |
 | `agent.py` | エージェント層。7 ツール（web_search/fetch_url/read_file/write_file/execute_python/execute_command/get_weather）、危険コマンド拒否、ループ防止（recursion_limit=12） |
-| `llm.py` | Ollama ネイティブ API クライアント。Thinking モード、JSON 抽出 |
-| `loop.py` | 自律ループ。行動プール（気分・駆動値で多彩な行動）、**内言生成**・ひとり反芻・実況通知、定期統合。main.py からバックグラウンド起動 |
+| `llm.py` | Ollama ネイティブ API クライアント。Thinking モード、JSON 抽出、**視覚解釈**（`chat_with_image`、qwen3.5 の vision） |
+| `loop.py` | 自律ループ。行動プール（気分・駆動値で多彩な行動）、**内言生成**・ひとり反芻・実況通知、定期統合。main.py からバックグラウンド起動。VRChat の身体で行動を表現 |
+| `perception.py` | 知覚ストリーム基盤。`Percept`（世界の一片）と `Perception`（常時 sense を回す）。外部センサー（視覚）を `add_sensor` で差し替え可能 |
+| `vrchat.py` | VRChat 接続層。**VRchatBody**（OSC: 発言/表情/移動）と **VRchatVision**（画面キャプチャ→変化検知→Percept）。Neuro-sama の神経SDK相当のハーネス |
 | `prompt.py` | 「稼働ルールのみ」の薄い共通フレーム + モード別人格フレーム（`MODE_FRAMES`）。人格はシード記憶から発現 |
 
 ---
@@ -303,6 +307,40 @@ Project-Lucina/
 - `recursion_limit: 12` — 思考/ツールの**無限ループ防止**
 - ツール未使用・タスク文そのまま返し → **自動リトライ**
 - 異常時は例外ハンドラで「エージェント実行中断」を返却
+
+---
+
+## 🥽 VRChat 接続（身体 + 視覚）
+
+モニカを VRChat（Linux / Proton）に繋ぎ、Neuro-sama の神経SDKに相当する**3層構造**を実現する。Python の `vrcpilot` をハーネスとして使う。
+
+```
+心（キャラ層 / g4-midnight-macaw-v2）── 何をしたいか決める（変更なし）
+        │
+  知覚 / 身体 を仲介
+        │
+   ┌────┴────┐
+知覚層              身体層
+VRchatVision       VRchatBody
+画面キャプチャ       OSC送信
+→ 変化検知 → Percept  → 発言(chatbox)
+→ OCR / 局面解釈      → 表情 / 移動
+```
+
+- **知覚層** `VRchatVision`: vrcpilot で VRChat 画面を撮り、フレーム差分で「変化」を見張る（LLM 不要・ms級）。変化を検知した時だけ OCR / 明度から `Percept` を作って知覚ストリームへ。**常時 LLM を回さない** = リアルタイム性と計算量の両立。
+- **身体層** `VRchatBody`: vrcpilot の OSC でアバターに出力。`say()`（chatbox 発言）、`emote()`（アバターパラメータ）、`move()`（前後左右）。自律行動を chatbox に静かに表示して「その場に居る」ことを伝える。
+- **視覚解釈** `llm.chat_with_image()`: 必要時（ファインチューニングした解釈）に qwen3.5:9b（think=false）へ画像を渡して短文に。キャラ層（g4）は vision 非対応のため分離。
+
+### 前提
+- VRChat 起動済み（Proton / XWayland）。`find_pids()` で検出。
+- VRChat 側で **OSC 有効化**済み（in_port=9000 / out_port=9001）。
+- `vrcpilot` と `inputtino-python` を `.venv` に導入済み。
+
+### 起動
+```bash
+.venv/bin/python main.py
+```
+VRChat 未起動や vrcpilot 未導入でもクラッシュせず、通常の自律ループとして動く。
 
 ---
 

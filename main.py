@@ -14,6 +14,8 @@ sys.path.insert(0, str(Path(__file__).parent / "src"))
 
 from lucina.loop import Loop
 from lucina.orchestrator import Orchestrator
+from lucina.perception import Perception
+from lucina.vrchat import VRchatBody, VRchatVision
 
 logging.basicConfig(
     level=logging.INFO,
@@ -39,9 +41,24 @@ def main():
 
     orch = Orchestrator(model="g4-midnight-macaw-v2")
 
+    # VRChat 接続（身体・知覚）— 失敗しても自律ループは壊さない
+    body = VRchatBody()
+    vision = VRchatVision(interval=8.0)
+    perception = Perception(sensors=[vision])
+    if body.enabled or vision.available():
+        print("VRChat接続: 有効 (身体OSC + 視覚)")
+    else:
+        print("VRChat接続: なし（vrcpilot非利用 or VRChat未起動）")
+
     # 自律ループをバックグラウンドで起動（ユーザーがいない間も世界は動く）
     interval = int(os.getenv("LUCINA_LOOP_INTERVAL", "60"))
-    loop = Loop(orch, interval=interval, notifier=notifier)
+    loop = Loop(
+        orch,
+        interval=interval,
+        notifier=notifier,
+        perception=perception,
+        body=body,
+    )
     t = threading.Thread(target=loop.start, name="autonomous-loop", daemon=True)
     t.start()
 
