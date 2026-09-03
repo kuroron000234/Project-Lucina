@@ -116,6 +116,230 @@ class VRchatBody:
             return False
 
 
+# simpleobsws が無い環境では OBS センサーを無効にする（遅延インポート）
+try:
+    import simpleobsws  # noqa: F401
+    _OBS_AVAILABLE = True
+except Exception as e:  # pragma: no cover - 環境依存
+    _OBS_AVAILABLE = False
+    _OBS_IMPORT_ERROR = e
+
+
+class OBSVisionSensor:
+    """知覚層センサー — OBS 経由で VRChat の実フレームを「見て」Percept にする。
+
+    vrcpilot の生の X11 スクリーンショットは Proton の GPU 合成フレームを
+    黒く返すため、実ワールドは OBS（PipeWire ウィンドウキャプチャ）経由で
+    取得するのが確実。`GetSourceScreenshot` で VRChat ウィンドウを撮り、
+    フレーム差分で変化を検知した時だけ Percept にする。
+
+    `Perception.add_sensor()` に適合する `sense()` を持つ。
+    """
+
+    def __init__(
+        self,
+        interval: float = 5.0,
+        change_threshold: float = 0.02,
+        name: str = "obs_vision",
+        source_name: str = "スクリーンキャプチャ (PipeWire)",
+        host: str = "127.0.0.1",
+        port: int = 4455,
+        password: str = "",
+    ):
+        self.interval = interval
+        self.change_threshold = change_threshold
+        self.name = name
+        self.source_name = source_name
+        self._host = host
+        self._port = port
+        self._password = password
+        self._obs = None
+        self._last_capture = 0.0
+        self._last_frame = None
+        self._last_percept: Percept | None = None
+        self._suppress_duplicate = 0
+        self.logger = logger.getChild("obs_vision")
+
+    @property
+    def enabled(self) -> bool:
+        return _OBS_AVAILABLE
+
+    def available(self) -> bool:
+        """OBS の WS サーバーが起動していて接続可能か（遅延確認・頻度抑え）。"""
+        if not _OBS_AVAILABLE:
+            return False
+        import socket
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.settimeout(0.5)
+            try:
+                s.connect((self._host, self._port))
+                return True
+            except Exception:
+                return False
+
+    async def _get_obs(self):
+        """OBS WS クライアントを取得（未接続なら接続・識別まで行う）。"""
+        if self._obs is None or not getattr(self._obs, "is_identified", False):
+            self._obs = simpleobsws.WebSocketClient(
+                url=f"ws://{self._host}:{self._port}",
+                password=self._password,
+            )
+            await self._obs.connect()
+            await self._obs.wait_until_identified()
+        return self._obs
+
+    async def _capture_frame(self):
+        """OBS の GetSourceScreenshot で VRChat フレーム（numpy RGB）を取得。"""
+        try:
+            obs = await self._get_obs()
+            r = await obs.call(simpleobsws.Request("GetSourceScreenshot", {
+                "sourceName": self.source_name,
+                "imageFormat": "png",
+                "imageWidth": 640,
+                "imageHeight": 360,
+            }), timeout=6)
+            data = (r.responseData or {}).get("imageData", "")
+            if "," in data[:64]:
+                data = data.split(",", 1)[1]
+            import base64
+
+            import cv2
+            import numpy as np
+            png = base64.b64decode(data)
+            frame = cv2.imdecode(np.frombuffer(png, np.uint8), cv2.IMREAD_COLOR)
+            if frame is None:
+                return None
+            # BGR → RGB（np.mean では同じだが、将来の色解析のため正規化）
+            return cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        except Exception as e:
+            # タイムアウト等で失敗したら接続を破棄し、次回再接続させる
+            self.logger.warning("OBS capture failed: %s", e)
+            if self._obs is not None:
+                try:
+                    await self._obs.disconnect()
+                except Exception:
+                    pass
+                self._obs = None
+            return None
+            # BGR → RGB（np.mean では同じだが、将来の色解析のため正規化）
+            return cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        except Exception as e:
+            self.logger.warning("OBS capture failed: %s", e)
+            return None
+
+    def _frame_diff_ratio(self, cur, ref) -> float:
+        """2フレーム間の変化量（0..1）を軽量計算する。"""
+        import numpy as np
+        try:
+            c = np.asarray(cur, dtype=np.float32)
+            r = np.asarray(ref, dtype=np.float32)
+            if c.shape != r.shape:
+                return 1.0
+            if c.size > 0:
+                scale = max(1, c.shape[0] // 120)
+                diff = np.abs(c[::scale, ::scale] - r[::scale, ::scale]).mean() / 255.0
+                return float(diff)
+            return 0.0
+        except Exception:
+            return 0.0
+
+    def _describe_scene(self, img) -> str:
+        """明度・彩度から情景のふんいきを短文で表現する。"""
+        import numpy as np
+        hsv = None
+        try:
+            import cv2
+            hsv = cv2.cvtColor(np.asarray(img), cv2.COLOR_RGB2HSV)
+        except Exception:
+            hsv = None
+        brightness = float(np.asarray(img).mean()) / 255.0
+        if hsv is not None:
+            sat_mean = float(hsv[:, :, 1].mean()) / 255.0
+        else:
+            sat_mean = 0.0
+
+        if brightness < 0.1:
+            base = "とても暗い場所"
+        elif brightness < 0.3:
+            base = "暗めの場所"
+        elif brightness > 0.8:
+            base = "明るい場所"
+        else:
+            base = "ふつうの明るさの場所"
+        if sat_mean > 0.5:
+            base += "（色彩豊かな景色）"
+        elif sat_mean < 0.2:
+            base += "（くすんだ景色）"
+        return base
+
+    def _interpret_change(self, frame) -> Percept | None:
+        """変化検知後の「局面解釈」— 明度・彩度から情景を短文化する。"""
+        now = datetime.now()
+        import numpy as np
+        h, w = frame.shape[:2] if hasattr(frame, "shape") else (0, 0)
+        brightness = float(np.asarray(frame).mean()) / 255.0
+        scene_desc = self._describe_scene(frame)
+        percept = Percept(
+            source="environment",
+            kind="scene",
+            text=(
+                f"今見えているVRChatの世界: {scene_desc}"
+                f"（明度{brightness:.2f}, {w}x{h}）"
+            ),
+            timestamp=now,
+            importance=0.5 if brightness > 0.1 else 0.3,
+        )
+        return percept
+
+    def sense(self, now=None, state=None, memory=None):
+        """Perception から呼ばれる。変化を検知した時だけ Percept を返す。"""
+        now = now or datetime.now()
+        import time
+        if not _OBS_AVAILABLE:
+            return []
+        if time.time() - self._last_capture < self.interval:
+            return []
+        self._last_capture = time.time()
+
+        # OBS の取得は asyncio ベース → 同期 sense() から新しいループで実行
+        try:
+            import asyncio
+            frame = asyncio.run(self._capture_frame())
+        except Exception as e:
+            self.logger.warning("OBS sense capture error: %s", e)
+            return []
+        if frame is None:
+            return []
+
+        # フレーム差分で変化を見張る
+        if self._last_frame is not None:
+            diff = self._frame_diff_ratio(frame, self._last_frame)
+        else:
+            diff = 1.0
+        self._last_frame = frame
+
+        if diff < self.change_threshold:
+            return []
+
+        percept = self._interpret_change(frame)
+
+        # 近い内容の重複抑制（同じ情景を連呼しない）
+        if self._last_percept and self._approx_equal(self._last_percept, percept):
+            self._suppress_duplicate += 1
+            if self._suppress_duplicate < 5:
+                return []
+            self._suppress_duplicate = 0
+
+        self._last_percept = percept
+        logger.info("OBSVisionSensor: 変化検知 -> %s", percept.text[:60])
+        return [percept]
+
+    @staticmethod
+    def _approx_equal(a: Percept, b: Percept) -> bool:
+        """最近の同じ情景かを（ラフに）判定する。"""
+        return a.text[:30] == b.text[:30]
+
+
 class VRchatVision:
     """知覚層センサー — VRChat 画面を「見て」Percept にする。
 

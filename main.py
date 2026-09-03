@@ -15,7 +15,7 @@ sys.path.insert(0, str(Path(__file__).parent / "src"))
 from lucina.loop import Loop
 from lucina.orchestrator import Orchestrator
 from lucina.perception import Perception
-from lucina.vrchat import VRchatBody, VRchatVision
+from lucina.vrchat import OBSVisionSensor, VRchatBody, VRchatVision
 
 logging.basicConfig(
     level=logging.INFO,
@@ -43,10 +43,15 @@ def main():
 
     # VRChat 接続（身体・知覚）— 失敗しても自律ループは壊さない
     body = VRchatBody()
-    vision = VRchatVision(interval=8.0)
+    # 視覚: OBS 優先（実ワールドが映る）。OBS 未起動なら vrcpilot 直撮りに切替
+    obs_vision = OBSVisionSensor(
+        interval=8.0,
+        password=os.getenv("OBS_WS_PASSWORD", "GvY9TwQ9KzuDjPjm"),
+    )
+    vision = obs_vision if obs_vision.available() else VRchatVision(interval=8.0)
     perception = Perception(sensors=[vision])
-    if body.enabled or vision.available():
-        print("VRChat接続: 有効 (身体OSC + 視覚)")
+    if vision.enabled and vision.available():
+        print(f"VRChat接続: 有効 (身体OSC + 視覚[{type(vision).__name__}])")
     else:
         print("VRChat接続: なし（vrcpilot非利用 or VRChat未起動）")
 

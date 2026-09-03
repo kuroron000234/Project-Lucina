@@ -114,10 +114,16 @@ class Loop:
 
         # 知覚ストリームを一巡（VRChat視覚の変化など → 内言・行動の材料に）
         scene_text = None
+        fresh_scene = False
         new_percepts = []
         if self.perception is not None:
             try:
                 new_percepts = self.perception.sense(state=state, memory=self.orchestrator.memory)
+                # このtickで「環境/シーン」の新しい知覚（外部センサーの視覚）が来たか
+                fresh_scene = any(
+                    getattr(p, "source", "") == "environment" and getattr(p, "kind", "") == "scene"
+                    for p in new_percepts
+                )
                 if new_percepts:
                     scene_text = self.perception.latest_text(exclude_sources=("body",))
             except Exception as e:
@@ -127,8 +133,9 @@ class Loop:
         action = self._decide_action(state, now)
 
         # 世界の変化を知覚したのに行動がない場合 → 「気づき」として反応する
-        # （人間も世界からのフィードバック→感覚→更新、と反応するもの）
-        if not action and scene_text:
+        # （人間も世界からのフィードバック→感覚→更新、と反応するもの。
+        #    ただし「新しく届いた知覚」にだけ反応し、古いscene_textの再掲はしない）
+        if not action and fresh_scene:
             action = "知覚: 世界の変化に気づいた"
             action_type = "知覚"
         else:
