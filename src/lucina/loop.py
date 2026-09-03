@@ -114,20 +114,28 @@ class Loop:
 
         # 知覚ストリームを一巡（VRChat視覚の変化など → 内言・行動の材料に）
         scene_text = None
+        new_percepts = []
         if self.perception is not None:
             try:
-                percepts = self.perception.sense(state=state, memory=self.orchestrator.memory)
-                if percepts:
+                new_percepts = self.perception.sense(state=state, memory=self.orchestrator.memory)
+                if new_percepts:
                     scene_text = self.perception.latest_text(exclude_sources=("body",))
             except Exception as e:
                 logger.error(f"Perception error: {e}")
 
         # 駆動値・気分に基づいて行動を決定
         action = self._decide_action(state, now)
+
+        # 世界の変化を知覚したのに行動がない場合 → 「気づき」として反応する
+        # （人間も世界からのフィードバック→感覚→更新、と反応するもの）
+        if not action and scene_text:
+            action = "知覚: 世界の変化に気づいた"
+            action_type = "知覚"
+        else:
+            action_type = self._action_type(action) if action else None
+
         if not action:
             return
-
-        action_type = self._action_type(action)
         logger.info(f"Autonomous action: {action}")
 
         # 共有した思い出をひとつ反芻する（人間らしい「ひとり反芻」）
@@ -268,7 +276,16 @@ class Loop:
             "日記": "今日のことを記しておこう。",
             "反芻": "あの日のこと、思い出していた。",
         }
-        line = chatbox_lines.get(action, "ここにいるよ。")
+        # 世界の変化への気づき: 内言の雰囲気を、環境に呼びかけるひとことに
+        if action.startswith("知覚"):
+            if thought:
+                # 内言の先頭文を、独り言→誰かに呼びかける形に置き換えて出さない
+                # （内言は心の声。chatboxは外の声。短く自然に）
+                line = "……あれ？何かが変わった気がする。"
+            else:
+                line = "……あれ？何かが変わった気がする。"
+        else:
+            line = chatbox_lines.get(action, "ここにいるよ。")
         # 思考中の指示を出してから表示すると自然
         self.body.typing(True)
         import time as _t
